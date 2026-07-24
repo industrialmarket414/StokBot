@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+
+# IDE / operating system
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets and local configuration
+.env
+.env.*
+Ayarlar/tsoft_api.json
+
+# Business-specific settings and mappings
+Ayarlar/*.xlsx
+Ayarlar/*.xls
+Ayarlar/*.csv
+
+# Supplier files, T-Soft exports, reports and API logs
+Archive/
+B2B/
+Cikti/
+DIA/
+FiyatListesi/
+Log/
+SabitStok/
+Tsoft/
+
+# Excel temporary files and local inspection artifacts
+~$*.xlsx
+~$*.xls
+*.inspect.ndjson
+
