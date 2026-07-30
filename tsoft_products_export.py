@@ -169,7 +169,9 @@ def urunleri_cek(site_url, token, limit=500):
         "Stock",
         "StockUnit",
         "Currency",
-        "CurrencyId"
+        "CurrencyId",
+        "SellingPrice",
+        "DiscountedSellingPrice"
     ])
 
     while True:
@@ -184,7 +186,9 @@ def urunleri_cek(site_url, token, limit=500):
                 "token": token,
                 "start": str(start),
                 "limit": str(limit),
-                "columns": kolonlar
+                "columns": kolonlar,
+                "CustomerGroupCode": "TZ0",
+                "FetchDiscountedPriceDetail": "true",
             },
             headers={"Accept": "application/json"},
             timeout=60
@@ -271,6 +275,11 @@ def secili_alanlari_hazirla(df):
         secili_df["Fiyat Birimi"] = kolon_al(df, "Currency")
     else:
         secili_df["Fiyat Birimi"] = kolon_al(df, "CurrencyId")
+
+    secili_df["T-SOFT LİSTE FİYATI"] = kolon_al(df, "SellingPrice")
+    secili_df["T-SOFT İNDİRİMLİ FİYATI"] = kolon_al(
+        df, "DiscountedSellingPrice"
+    )
 
     secili_df = secili_df[
         secili_df["Web Servis Kodu"].astype(str).str.strip() != ""

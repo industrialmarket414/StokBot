@@ -117,6 +117,7 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
         "ProductId",
         "Ürün Web Servis Kodu",
         "Fiyat Birimi",
+        "T-SOFT LİSTE FİYATI TL",
         "MİN. KÂR ORANI (MANUEL)",
         "HEDEF KÂR ORANI (MANUEL)",
         "SEÇİLEN İSKONTO",
@@ -143,6 +144,7 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
             min_kar = ondalik(row.get("MİN. KÂR ORANI (MANUEL)"))
             hedef_kar = ondalik(row.get("HEDEF KÂR ORANI (MANUEL)"))
             secilen_iskonto = ondalik(row.get("SEÇİLEN İSKONTO"))
+            tsoft_liste_tl = ondalik(row.get("T-SOFT LİSTE FİYATI TL"))
             if min_kar is None or hedef_kar is None:
                 raise ValueError("Minimum veya hedef kâr oranı boş")
             if min_kar < 0 or hedef_kar < 0 or min_kar > 100 or hedef_kar > 100:
@@ -153,6 +155,8 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
                 raise ValueError("Seçilen iskonto boş")
             if secilen_iskonto < 0 or secilen_iskonto >= 100:
                 raise ValueError("Seçilen iskonto 0-100 aralığında olmalı")
+            if tsoft_liste_tl is None or tsoft_liste_tl <= 0:
+                raise ValueError("T-Soft liste fiyatı TL boş veya sıfır")
             gecerli_listeler = []
             for liste_col, iskonto_col in kolon_ciftleri:
                 liste = ondalik(row.get(liste_col))
@@ -178,6 +182,18 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
             if secilen < min_fiyat - tolerans or secilen > hedef_fiyat + tolerans:
                 raise ValueError(
                     f"Seçilen fiyat {min_fiyat:.2f}-{hedef_fiyat:.2f} TL aralığında değil"
+                )
+            tsoft_secilen_satis = tsoft_liste_tl * (
+                Decimal("1") - secilen_iskonto / Decimal("100")
+            )
+            if tsoft_secilen_satis < ortalama * Decimal("1.05") - tolerans:
+                kar_yuzde = (
+                    (tsoft_secilen_satis / ortalama - Decimal("1"))
+                    * Decimal("100")
+                )
+                raise ValueError(
+                    f"Seçilen iskonto T-Soft fiyatında yalnızca %{kar_yuzde:.2f} "
+                    "kâr bırakıyor; minimum %5 olmalı"
                 )
             hazir.append(
                 {
