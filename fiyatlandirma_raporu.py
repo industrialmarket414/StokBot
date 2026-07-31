@@ -382,6 +382,23 @@ KRC_TSOFT_MARKA_ADLARI = {
     "ZİGAR": ("ZİGAR",),
 }
 
+BUYUK_KALPLER_TSOFT_MARKA_ADLARI = {
+    **KRC_TSOFT_MARKA_ADLARI,
+    "ACK": ("ACK",),
+    "AUDIO": ("AUDIO",),
+    "BVN BAHCIVAN": ("BVN", "BAHCIVAN", "BAHÇIVAN"),
+    "HOROZ ELECTRIC": ("HOROZ",),
+    "INOLED": ("INOLED", "İNOLED"),
+    "LEDVANCE": ("LEDVANCE", "OSRAM"),
+    "MITSUBISHI ELECTRIC": ("MITSUBISHI", "MITSUBISHI ELECTRIC"),
+    "NOAS": ("NOAS",),
+    "OSRAM": ("OSRAM", "LEDVANCE"),
+    "OZNUR KABLO": ("OZNUR", "ÖZNUR"),
+    "SUNLIGHT": ("SUNLIGHT",),
+    "TUNCMATIK": ("TUNCMATIK", "TUNÇMATİK"),
+    "VOLTEK": ("VOLTEK",),
+}
+
 UCFAZ_ERSE_ONAYLI_KOD_ESLESMELERI = {
     "2X0 75 ERVITAL LIHCH FE180 PH120": "MDER009800200075O",
     "2X0 75 LIYCY": "MDER005700200075G",
@@ -1491,7 +1508,22 @@ def krc_elektrik_tsoft_kodu(
     kaynak_bicimleri = [kaynak_kod]
     sifirsiz_kod = ""
     if len(kod_parcalari) > 1:
-        kaynak_bicimleri.append(" ".join(kod_parcalari[1:]))
+        onejsiz_kod = " ".join(kod_parcalari[1:]).strip()
+        kaynak_bicimleri.append(onejsiz_kod)
+        if (
+            marka_norm == metin_norm("EMAS")
+            and onejsiz_kod in hedef_kodlari
+        ):
+            kod_adaylari.add(onejsiz_kod)
+        if marka_norm == metin_norm("VIKO"):
+            viko_parcalari = kod_parcalari[1:]
+            if (
+                len(viko_parcalari) >= 2
+                and re.fullmatch(r"\d{6,10}", viko_parcalari[0])
+                and re.fullmatch(r"[A-Z]", viko_parcalari[1])
+                and viko_parcalari[0] in hedef_kodlari
+            ):
+                kod_adaylari.add(viko_parcalari[0])
         if marka_norm in {
             metin_norm("LEGRAND"),
             metin_norm("PHOENIX CONTACT"),
@@ -1520,6 +1552,9 @@ def krc_elektrik_tsoft_kodu(
         if len(sifirsiz_adaylar) == 1:
             return next(iter(sifirsiz_adaylar))
 
+    if marka_norm == metin_norm("ORTAÇ"):
+        return ""
+
     # Ürün adında gerçek üretici modeli bulunuyorsa yalnız aynı marka içindeki
     # tek bir T-Soft koduyla eşleşmesine izin verilir.
     adaylar = set()
@@ -1544,6 +1579,101 @@ def krc_elektrik_tsoft_kodu(
                 adaylar.add(aday_kod)
 
     return next(iter(adaylar)) if len(adaylar) == 1 else ""
+
+
+def buyuk_kalpler_tsoft_kodu(
+    marka: str,
+    kod: str,
+    urun_adi: str,
+    tsoft_marka_urunleri: dict[str, dict],
+    tsoft_kodlari: set[str],
+) -> str:
+    """Büyük Kalpler kodlarını yalnız doğrulanan T-Soft model kodlarına bağlar."""
+    marka_norm = metin_norm(marka)
+    kaynak_kod = metin_norm(kod)
+    kod_adaylari = set()
+
+    if marka_norm == metin_norm("CATA"):
+        kompakt_kod = re.sub(r"[^A-Z0-9]", "", kaynak_kod)
+        if kompakt_kod.startswith("CT") and len(kompakt_kod) > 2:
+            govde = kompakt_kod[2:]
+            cata_adaylari = {
+                f"CT {govde}",
+                f"CT-{govde}",
+            }
+            if govde[-1].isalpha():
+                cata_adaylari.update(
+                    {
+                        f"CT {govde[:-1]}",
+                        f"CT-{govde[:-1]}",
+                    }
+                )
+            if len(govde) > 1 and govde[-1].isalpha() and govde[-2].isalpha():
+                cata_adaylari.update(
+                    {
+                        f"CT {govde[:-2]}",
+                        f"CT-{govde[:-2]}",
+                    }
+                )
+            kod_adaylari.update(
+                metin_norm(aday)
+                for aday in cata_adaylari
+                if metin_norm(aday) in tsoft_kodlari
+            )
+            kaynak_urun_adi = metin_norm(urun_adi)
+            for ad_kodu in re.findall(r"\bCT[\s\-_]*\d+[A-Z]*\b", kaynak_urun_adi):
+                ad_kompakt = re.sub(r"[^A-Z0-9]", "", ad_kodu)
+                if not ad_kompakt.startswith("CT"):
+                    continue
+                ad_govde = ad_kompakt[2:]
+                ad_adaylari = {
+                    f"CT {ad_govde}",
+                    f"CT-{ad_govde}",
+                }
+                kod_adaylari.update(
+                    metin_norm(aday)
+                    for aday in ad_adaylari
+                    if metin_norm(aday) in tsoft_kodlari
+                )
+
+    if marka_norm == metin_norm("ACK"):
+        ack_eslesmesi = re.fullmatch(r"(.+\d)[A-Z]{1,2}", kaynak_kod)
+        if ack_eslesmesi and ack_eslesmesi.group(1) in tsoft_kodlari:
+            kod_adaylari.add(ack_eslesmesi.group(1))
+        if kaynak_kod.endswith(" PRO"):
+            pro_siz_kod = kaynak_kod[: -len(" PRO")].strip()
+            if pro_siz_kod in tsoft_kodlari:
+                kod_adaylari.add(pro_siz_kod)
+        if kaynak_kod.startswith("ACK"):
+            ack_siz_kod = kaynak_kod[len("ACK") :].strip()
+            if ack_siz_kod in tsoft_kodlari:
+                kod_adaylari.add(ack_siz_kod)
+
+    if marka_norm == metin_norm("OZNUR KABLO"):
+        oznur_eslesmesi = elektromarketim_oznur_tsoft_kodu(kaynak_kod)
+        if oznur_eslesmesi in tsoft_kodlari:
+            kod_adaylari.add(oznur_eslesmesi)
+
+    if marka_norm == metin_norm("AUDIO"):
+        audio_ozel_eslesmeler = {
+            metin_norm("001284"): metin_norm("1284"),
+            metin_norm("001460"): metin_norm("AUDIO 001460"),
+            metin_norm("001463"): metin_norm("AUDIO 001463"),
+        }
+        audio_hedef = audio_ozel_eslesmeler.get(kaynak_kod)
+        if audio_hedef in tsoft_kodlari:
+            kod_adaylari.add(audio_hedef)
+
+    genel_eslesme = krc_elektrik_tsoft_kodu(
+        marka,
+        kod,
+        urun_adi,
+        tsoft_marka_urunleri,
+    )
+    if genel_eslesme in tsoft_kodlari:
+        kod_adaylari.add(genel_eslesme)
+
+    return next(iter(kod_adaylari)) if len(kod_adaylari) == 1 else ""
 
 
 def elektrik_malzemesi_tsoft_kodu(
@@ -2398,6 +2528,9 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
             tsoft_krc_marka_urunleri = ayarlar.get(
                 "tsoft_krc_marka_urunleri", {}
             )
+            tsoft_buyuk_kalpler_marka_urunleri = ayarlar.get(
+                "tsoft_buyuk_kalpler_marka_urunleri", {}
+            )
             tsoft_ortac_kompakt_indeksi = {}
             for tsoft_ortac_kodu in tsoft_ortac_kodlari:
                 kompakt_ortac_kodu = re.sub(r"[^A-Z0-9]", "", tsoft_ortac_kodu)
@@ -2784,6 +2917,16 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
                     )
                     if krc_elektrik_eslesmesi:
                         kod_anahtarlari.add(krc_elektrik_eslesmesi)
+                if firma_norm == metin_norm("BÜYÜK KALPLER"):
+                    buyuk_kalpler_eslesmesi = buyuk_kalpler_tsoft_kodu(
+                        rakip_marka,
+                        kod,
+                        row.get(urun_adi_col, "") if urun_adi_col else "",
+                        tsoft_buyuk_kalpler_marka_urunleri,
+                        tsoft_kodlari,
+                    )
+                    if buyuk_kalpler_eslesmesi:
+                        kod_anahtarlari.add(buyuk_kalpler_eslesmesi)
                 if firma_norm == metin_norm("ELEKTRİK MALZEMESİ"):
                     elektrik_malzemesi_eslesmesi = elektrik_malzemesi_tsoft_kodu(
                         rakip_marka,
@@ -2883,7 +3026,7 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
                     "ProductId": "",
                     "Web Servis Kodu": "",
                     "Firma": firma,
-                    "Kaynak Dosya": str(ayar.get("Dosya", "")),
+                    "Kaynak Dosya": ayar.get("Dosya", ""),
                     "Kaynak Satır": "",
                     "Hata": str(exc),
                 }
@@ -2905,6 +3048,10 @@ def tsoft_haritasi_olustur(tsoft: pd.DataFrame) -> tuple[dict, dict]:
 
 
 def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: dict):
+    if isinstance(eslesme, (str, Path)):
+        eslesme = pd.read_excel(eslesme, dtype=str).fillna("")
+    if isinstance(tsoft, (str, Path)):
+        tsoft = pd.read_excel(tsoft, dtype=str).fillna("")
     eslesme = eslesme.copy()
     eslesme_adaylari = {
         "ProductId": ["ProductId"],
@@ -3081,6 +3228,7 @@ def rapor_olustur(
         "ORTALAMA RAKİP FİYATI",
         "EN YÜKSEK RAKİP FİYATI",
         "FİYAT KONUMUMUZ",
+        "RAKİP FARK %",
     ]
     karar = [
         "SEÇİLEN İSKONTO",
@@ -3359,6 +3507,11 @@ def rapor_olustur(
                 f'"ORTALAMANIN ÜSTÜNDE")))))'
             ),
         )
+        ws.cell(
+            satir_no,
+            index["RAKİP FARK %"],
+            f'=IFERROR(({bizim_fiyat_ref}/{ort_rakip_ref}-1)*100,"")',
+        )
         gercek_kar = f"(({secilen_tsoft_satis}/{min_ort}-1)*100)"
         ws.cell(
             satir_no,
@@ -3532,7 +3685,7 @@ def rapor_olustur(
         if any(k in ad for k in ["LİSTE", "NET ALIŞ", "SATIŞ"]):
             for r in range(3, son_satir + 1):
                 ws.cell(r, index[ad]).number_format = '#,##0.00'
-        if any(k in ad for k in ["İSKONTO", "KÂR ORANI"]):
+        if any(k in ad for k in ["İSKONTO", "KÂR ORANI", "FARK %"]):
             for r in range(3, son_satir + 1):
                 ws.cell(r, index[ad]).number_format = '0.00'
 
@@ -3545,6 +3698,7 @@ def rapor_olustur(
         "Fiyat Birimi": 13,
         "KÂR KONTROLÜ": 24,
         "FİYAT KONUMUMUZ": 24,
+        "RAKİP FARK %": 16,
         "ONAY": 12,
         "AKTARIM DURUMU": 24,
     }
@@ -3599,13 +3753,14 @@ def rapor_olustur(
         "Marka",
         "Toplam Ürün",
         "Rakip Fiyatı Bulunan",
-        "Bizim Ortalama Fiyatımız",
-        "Piyasa Ortalama Fiyatı",
-        "Ortalama Fiyat Farkı %",
+        "Rakip Kapsama %",
+        "Ortalama Ürün Bazlı Fark %",
+        "Rekabetçi Ürün %",
         "En Ucuz Olduğumuz",
         "Ortalamanın Altında",
         "Ortalamanın Üstünde",
         "En Pahalı Olduğumuz",
+        "Rakip Fiyatı Yok",
     ]
     marka_ws.append(marka_basliklar)
     markalar = sorted(
@@ -3616,8 +3771,8 @@ def rapor_olustur(
         }
     )
     fiyat_marka_col = get_column_letter(index["Marka"])
-    bizim_col = get_column_letter(index["BİZİM FİYATIMIZ KDV HARİÇ"])
     piyasa_col = get_column_letter(index["ORTALAMA RAKİP FİYATI"])
+    rakip_fark_col = get_column_letter(index["RAKİP FARK %"])
     konum_col = get_column_letter(index["FİYAT KONUMUMUZ"])
     for marka_satir, marka in enumerate(markalar, 2):
         marka_ws.cell(marka_satir, 1, marka)
@@ -3635,17 +3790,17 @@ def rapor_olustur(
         marka_ws.cell(
             marka_satir,
             4,
-            f'=IFERROR(AVERAGEIF(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${bizim_col}$3:${bizim_col}${son_satir}),"")',
+            f'=IFERROR(C{marka_satir}/B{marka_satir}*100,"")',
         )
         marka_ws.cell(
             marka_satir,
             5,
-            f'=IFERROR(AVERAGEIF(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${piyasa_col}$3:${piyasa_col}${son_satir}),"")',
+            f'=IFERROR(AVERAGEIFS(Fiyatlandırma!${rakip_fark_col}$3:${rakip_fark_col}${son_satir},Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${rakip_fark_col}$3:${rakip_fark_col}${son_satir},"<>"),"")',
         )
         marka_ws.cell(
             marka_satir,
             6,
-            f'=IFERROR((D{marka_satir}/E{marka_satir}-1)*100,"")',
+            f'=IFERROR((G{marka_satir}+H{marka_satir})/C{marka_satir}*100,"")',
         )
         for sutun, konum in [
             (7, "EN UCUZ"),
@@ -3658,18 +3813,113 @@ def rapor_olustur(
                 sutun,
                 f'=COUNTIFS(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${konum_col}$3:${konum_col}${son_satir},"{konum}")',
             )
+        marka_ws.cell(
+            marka_satir,
+            11,
+            f'=B{marka_satir}-C{marka_satir}',
+        )
     for cell in marka_ws[1]:
         cell.fill = PatternFill("solid", fgColor="9C6500")
         cell.font = Font(color="FFFFFF", bold=True)
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     marka_ws.freeze_panes = "A2"
-    marka_ws.auto_filter.ref = f"A1:J{max(len(markalar) + 1, 2)}"
-    for col in range(1, 11):
+    marka_ws.auto_filter.ref = f"A1:K{max(len(markalar) + 1, 2)}"
+    for col in range(1, 12):
         marka_ws.column_dimensions[get_column_letter(col)].width = 24
     for row in range(2, len(markalar) + 2):
-        for col in (4, 5):
-            marka_ws.cell(row, col).number_format = '#,##0.00'
-        marka_ws.cell(row, 6).number_format = '0.00'
+        for col in (4, 5, 6):
+            marka_ws.cell(row, col).number_format = '0.00'
+
+    urun_rekabet_ws = wb.create_sheet("Ürün Rekabet")
+    urun_rekabet_basliklar = [
+        "ProductId",
+        "Marka",
+        "Kategori",
+        "Ürün Web Servis Kodu",
+        "Ürün Adı",
+        "Bizim Fiyatımız KDV Hariç",
+    ]
+    for firma in rakip_firmalar:
+        urun_rekabet_basliklar.extend(
+            [
+                f"{firma} STOK",
+                f"{firma} NET SATIŞ KDV HARİÇ",
+            ]
+        )
+    urun_rekabet_basliklar.extend(
+        [
+            "En Düşük Rakip Fiyatı",
+            "Ortalama Rakip Fiyatı",
+            "En Yüksek Rakip Fiyatı",
+            "Rakip Fark %",
+            "Fiyat Konumumuz",
+        ]
+    )
+    urun_rekabet_ws.append(urun_rekabet_basliklar)
+    urun_rekabet_kaynaklari = [
+        "ProductId",
+        "Marka",
+        "Kategori",
+        "Ürün Web Servis Kodu",
+        "Ürün Adı",
+        "BİZİM FİYATIMIZ KDV HARİÇ",
+    ]
+    for firma in rakip_firmalar:
+        urun_rekabet_kaynaklari.extend(
+            [
+                f"{firma} STOK",
+                f"{firma} NET SATIŞ KDV HARİÇ",
+            ]
+        )
+    urun_rekabet_kaynaklari.extend(
+        [
+            "EN DÜŞÜK RAKİP FİYATI",
+            "ORTALAMA RAKİP FİYATI",
+            "EN YÜKSEK RAKİP FİYATI",
+            "RAKİP FARK %",
+            "FİYAT KONUMUMUZ",
+        ]
+    )
+    for satir_no in range(3, son_satir + 1):
+        hedef_satir = satir_no - 1
+        for hedef_col, kaynak_baslik in enumerate(urun_rekabet_kaynaklari, 1):
+            kaynak_col = index.get(kaynak_baslik)
+            if not kaynak_col:
+                continue
+            kaynak_hucre = f"{get_column_letter(kaynak_col)}{satir_no}"
+            urun_rekabet_ws.cell(
+                hedef_satir,
+                hedef_col,
+                f"='Fiyatlandırma'!{kaynak_hucre}",
+            )
+    for cell in urun_rekabet_ws[1]:
+        cell.fill = PatternFill("solid", fgColor="9C6500")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    urun_rekabet_ws.freeze_panes = "A2"
+    urun_rekabet_ws.auto_filter.ref = (
+        f"A1:{get_column_letter(len(urun_rekabet_basliklar))}{max(son_satir - 1, 2)}"
+    )
+    urun_rekabet_genislik = {
+        "ProductId": 12,
+        "Marka": 18,
+        "Kategori": 24,
+        "Ürün Web Servis Kodu": 24,
+        "Ürün Adı": 52,
+        "Bizim Fiyatımız KDV Hariç": 22,
+        "Fiyat Konumumuz": 24,
+        "Rakip Fark %": 16,
+    }
+    for col, baslik in enumerate(urun_rekabet_basliklar, 1):
+        urun_rekabet_ws.column_dimensions[get_column_letter(col)].width = (
+            urun_rekabet_genislik.get(baslik, 18)
+        )
+    for row in range(2, max(son_satir, 2)):
+        for col, baslik in enumerate(urun_rekabet_basliklar, 1):
+            if "FİYAT" in baslik or "Fiyat" in baslik or "SATIŞ" in baslik:
+                urun_rekabet_ws.cell(row, col).number_format = '#,##0.00'
+            if "FARK %" in baslik:
+                urun_rekabet_ws.cell(row, col).number_format = '0.00'
 
     hata_ws = wb.create_sheet("Hatalar")
     hata_baslik = ["ProductId", "Web Servis Kodu", "Firma", "Kaynak Dosya", "Kaynak Satır", "Hata"]
@@ -3761,8 +4011,8 @@ def main(argv=None) -> int:
             tsoft_kodu = metin_norm(row.get("Web Servis Kodu", ""))
             if not tsoft_kodu:
                 continue
-            for kod_eslesmesi in re.findall(r"\d{4,6}", tsoft_kodu):
-                sayisal_kod = kod_eslesmesi.lstrip("0") or "0"
+            for audio_kod_eslesmesi in re.findall(r"\d{4,6}", tsoft_kodu):
+                sayisal_kod = audio_kod_eslesmesi.lstrip("0") or "0"
                 tsoft_audio_sayisal_indeksi.setdefault(
                     sayisal_kod, set()
                 ).add(tsoft_kodu)
@@ -3880,8 +4130,7 @@ def main(argv=None) -> int:
         }
         for _, row in tsoft.iterrows():
             tsoft_kodu = metin_norm(row.get("Web Servis Kodu", ""))
-            tsoft_urun_adi_ham = str(row.get("Ürün Adı", ""))
-            tsoft_urun_adi = metin_norm(tsoft_urun_adi_ham)
+            tsoft_urun_adi = metin_norm(row.get("Ürün Adı", ""))
             if not tsoft_kodu or not tsoft_urun_adi:
                 continue
             for marka, marka_adlari in UCFAZ_TSOFT_MARKA_ADLARI.items():
@@ -3979,6 +4228,53 @@ def main(argv=None) -> int:
                     set(),
                 ).add(tsoft_kodu)
         ayarlar["tsoft_krc_marka_urunleri"] = krc_marka_urunleri
+        buyuk_kalpler_marka_urunleri = {
+            metin_norm(marka): {
+                "urunler": [],
+                "ham_urunler": [],
+                "kodlar": set(),
+                "kompakt": {},
+                "maks_parca": 1,
+            }
+            for marka in BUYUK_KALPLER_TSOFT_MARKA_ADLARI
+        }
+        for _, row in tsoft.iterrows():
+            tsoft_kodu = metin_norm(row.get("Web Servis Kodu", ""))
+            tsoft_urun_adi = metin_norm(row.get("Ürün Adı", ""))
+            if not tsoft_kodu or not tsoft_urun_adi:
+                continue
+            for marka, marka_adlari in BUYUK_KALPLER_TSOFT_MARKA_ADLARI.items():
+                if any(
+                    zeybek_ifade_iceriyor(
+                        tsoft_urun_adi,
+                        metin_norm(marka_adi),
+                    )
+                    for marka_adi in marka_adlari
+                ):
+                    buyuk_kalpler_marka_urunleri[metin_norm(marka)][
+                        "urunler"
+                    ].append((tsoft_kodu, tsoft_urun_adi))
+                    buyuk_kalpler_marka_urunleri[metin_norm(marka)][
+                        "ham_urunler"
+                    ].append((tsoft_kodu, str(row.get("Ürün Adı", ""))))
+        for marka_bilgisi in buyuk_kalpler_marka_urunleri.values():
+            marka_bilgisi["kodlar"] = {
+                kod for kod, _ in marka_bilgisi["urunler"]
+            }
+            for kod in marka_bilgisi["kodlar"]:
+                kompakt = re.sub(r"[^A-Z0-9]", "", kod)
+                if kompakt:
+                    marka_bilgisi["kompakt"].setdefault(
+                        kompakt,
+                        set(),
+                    ).add(kod)
+                marka_bilgisi["maks_parca"] = max(
+                    marka_bilgisi["maks_parca"],
+                    len(kod.split()),
+                )
+        ayarlar["tsoft_buyuk_kalpler_marka_urunleri"] = (
+            buyuk_kalpler_marka_urunleri
+        )
         urunler, tedarikciler, hatalar = fiyat_verisini_hazirla(eslesme, tsoft, ayarlar)
         rakip_firmalar, rakip_haritasi, rakip_hatalari = rakip_verilerini_oku(
             ayarlar["rakipler"], ayarlar
