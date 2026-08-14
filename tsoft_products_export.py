@@ -171,7 +171,8 @@ def urunleri_cek(site_url, token, limit=500):
         "Currency",
         "CurrencyId",
         "SellingPrice",
-        "DiscountedSellingPrice"
+        "DiscountedSellingPrice",
+        "IsActive"
     ])
 
     while True:
@@ -275,6 +276,22 @@ def secili_alanlari_hazirla(df):
         secili_df["Fiyat Birimi"] = kolon_al(df, "Currency")
     else:
         secili_df["Fiyat Birimi"] = kolon_al(df, "CurrencyId")
+
+    aktiflik = kolon_al(df, "IsActive").str.upper()
+    secili_df["T-SOFT AKTİFLİK"] = aktiflik.map(
+        {
+            "1": "AKTİF",
+            "TRUE": "AKTİF",
+            "ACTIVE": "AKTİF",
+            "AKTİF": "AKTİF",
+            "AKTIF": "AKTİF",
+            "0": "PASİF",
+            "FALSE": "PASİF",
+            "INACTIVE": "PASİF",
+            "PASİF": "PASİF",
+            "PASIF": "PASİF",
+        }
+    ).fillna("BİLİNMİYOR")
 
     secili_df["T-SOFT LİSTE FİYATI"] = kolon_al(df, "SellingPrice")
     secili_df["T-SOFT İNDİRİMLİ FİYATI"] = kolon_al(

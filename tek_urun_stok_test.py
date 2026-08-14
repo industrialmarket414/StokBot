@@ -1,250 +1,198 @@
 from pathlib import Path
 from datetime import datetime
-import json
 import re
 
 import pandas as pd
-import requests
+
+from tsoft_api import (
+    api_login,
+    config_oku,
+    sayiya_cevir,
+    stok_batch_gonder,
+    urun_getir_product_code,
+    urun_kodu_temizle,
+    urun_stok_degeri,
+)
 
 
 BASE_DIR = Path(__file__).parent
-AYARLAR_DIR = BASE_DIR / "Ayarlar"
-LOG_DIR = BASE_DIR / "Log"
+CIKTI_DIR = BASE_DIR / "Cikti"
+TEST_DIR = CIKTI_DIR / "TEST"
 
-CONFIG_FILE = AYARLAR_DIR / "tsoft_api.json"
-
-
-def urun_kodu_temizle(deger):
-    if pd.isna(deger):
-        return ""
-
-    return re.sub(r"\s+", "", str(deger))
+GUNCELLEME_DOSYA = CIKTI_DIR / "tum_bayiler_stok_guncellenecekler.xlsx"
 
 
-def sayiya_cevir(deger, varsayilan=0):
-    if pd.isna(deger):
-        return varsayilan
-
-    metin = str(deger).strip().replace(",", ".")
-
-    if metin == "" or metin.lower() == "nan":
-        return varsayilan
-
-    try:
-        return int(float(metin))
-    except Exception:
-        return varsayilan
-
-
-def config_oku():
-    if not CONFIG_FILE.exists():
-        print("Ayar dosyasi bulunamadi:")
-        print(CONFIG_FILE)
+def test_urununu_oku(product_code):
+    if not GUNCELLEME_DOSYA.exists():
+        print("Tum bayiler guncelleme dosyasi bulunamadi:")
+        print(GUNCELLEME_DOSYA)
+        print("Once stok_eslestir.py kodunu calistir.")
         raise SystemExit
 
-    with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    df = pd.read_excel(GUNCELLEME_DOSYA, dtype=str).fillna("")
 
-    site_url = str(data.get("site_url", "")).strip().rstrip("/")
-    username = str(data.get("username", "")).strip()
-    password = str(data.get("password", "")).strip()
-
-    if not site_url or not username or not password:
-        print("tsoft_api.json icinde site_url, username veya password bos.")
-        raise SystemExit
-
-    return site_url, username, password
-
-
-def token_cevaptan_bul(data):
-    if not isinstance(data, dict):
-        return None
-
-    for key in ["token", "access_token", "bearer_token"]:
-        if data.get(key):
-            return data.get(key)
-
-    if isinstance(data.get("data"), dict):
-        for key in ["token", "access_token", "bearer_token"]:
-            if data["data"].get(key):
-                return data["data"].get(key)
-
-    if isinstance(data.get("data"), list) and data["data"]:
-        first = data["data"][0]
-        if isinstance(first, dict):
-            for key in ["token", "access_token", "bearer_token"]:
-                if first.get(key):
-                    return first.get(key)
-
-    return None
-
-
-def api_login(site_url, username, password):
-    url = f"{site_url}/rest1/auth/login/{username}"
-
-    print("Token aliniyor...")
-
-    response = requests.post(
-        url,
-        data={"pass": password},
-        headers={"Accept": "application/json"},
-        timeout=30,
-    )
-
-    try:
-        data = response.json()
-    except Exception:
-        print("Token JSON cevabi alinamadi.")
-        print(response.text[:1000])
-        raise SystemExit
-
-    LOG_DIR.mkdir(exist_ok=True)
-    log_path = LOG_DIR / "tsoft_api_login_response.json"
-
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-    token = token_cevaptan_bul(data)
-
-    if not token:
-        print("Token alinamadi. API cevabi loglandi:")
-        print(log_path)
-        raise SystemExit
-
-    print("Token alindi.")
-    return token
-
-
-def cevap_liste_al(data):
-    if isinstance(data, list):
-        return data
-
-    if not isinstance(data, dict):
-        return []
-
-    olasi_anahtarlar = ["data", "products", "items", "list", "result"]
-
-    for key in olasi_anahtarlar:
-        value = data.get(key)
-
-        if isinstance(value, list):
-            return value
-
-        if isinstance(value, dict):
-            for inner_key in olasi_anahtarlar:
-                inner_value = value.get(inner_key)
-                if isinstance(inner_value, list):
-                    return inner_value
-
-    return []
-
-
-def urun_getir_product_code(site_url, token, product_code):
-    url = f"{site_url}/rest1/product/getProducts"
-
-    response = requests.post(
-        url,
-        data={
-            "token": token,
-            "start": "0",
-            "limit": "1",
-            "columns": "ProductId,ProductCode,Stock",
-            "f": f"ProductCode|{product_code}|equal|",
-        },
-        headers={"Accept": "application/json"},
-        timeout=60,
-    )
-
-    try:
-        data = response.json()
-    except Exception:
-        return None
-
-    urunler = cevap_liste_al(data)
-
-    if not urunler:
-        return None
-
-    return urunler[0]
-
-
-def urun_stok_degeri(urun):
-    if not isinstance(urun, dict):
-        return None
-
-    for alan in ["Stock", "stock", "Stok"]:
-        if alan in urun:
-            return urun.get(alan)
-
-    return None
-
-
-def api_cevabi_basarili_mi(data):
-    if data is None:
-        return False
-
-    metin = json.dumps(data, ensure_ascii=False).lower()
-
-    hata_kelimeleri = [
-        "hata",
-        "error",
-        "basarisiz",
-        "gecersiz",
-        "yetkisiz",
-        "unauthorized",
-        "permission",
+    gerekli_kolonlar = [
+        "ProductId",
+        "Web Servis Kodu",
+        "Bayi Toplam Stok",
+        "Guncellenecek Stok",
     ]
-    basari_kelimeleri = ["basari", "success", "pri001", "gni001"]
+    for kolon in gerekli_kolonlar:
+        if kolon not in df.columns:
+            print(f"Excel icinde eksik kolon var: {kolon}")
+            raise SystemExit
 
-    if any(kelime in metin for kelime in hata_kelimeleri):
-        return False
+    temiz_product_code = urun_kodu_temizle(product_code)
+    df["_Temiz Kod"] = df["Web Servis Kodu"].apply(urun_kodu_temizle)
+    bulunan = df[
+        df["_Temiz Kod"].str.upper() == temiz_product_code.upper()
+    ].copy()
 
-    if any(kelime in metin for kelime in basari_kelimeleri):
-        return True
+    if bulunan.empty:
+        print(f"{product_code} guncelleme listesinde bulunamadi.")
+        raise SystemExit
 
-    return False
+    if len(bulunan) != 1:
+        print(f"{product_code} icin birden fazla satir bulundu. Islem durduruldu.")
+        print(bulunan.to_string(index=False))
+        raise SystemExit
 
+    row = bulunan.iloc[0]
+    temiz_product_code = urun_kodu_temizle(row["Web Servis Kodu"])
+    bayi_toplam_stok = sayiya_cevir(row["Bayi Toplam Stok"])
+    guncellenecek_stok = sayiya_cevir(row["Guncellenecek Stok"])
 
-def stok_batch_gonder(site_url, token, batch_no, batch_df):
-    url = f"{site_url}/rest1/product/updateProducts"
+    if str(row.get("Guncelleme Durumu", "")).strip().upper() == "GONDERILMEYECEK":
+        print("Bu urun stok guncellemesine kapali. Islem durduruldu.")
+        raise SystemExit
 
-    gonderilecekler = [
-        {
-            "ProductCode": urun_kodu_temizle(row["ProductCode"]),
-            "Stock": int(row["Guncellenecek Stok"]),
-        }
-        for _, row in batch_df.iterrows()
-    ]
-
-    response = requests.post(
-        url,
-        data={
-            "token": token,
-            "data": json.dumps(gonderilecekler, ensure_ascii=False),
-        },
-        headers={"Accept": "application/json"},
-        timeout=90,
-    )
-
-    try:
-        cevap = response.json()
-    except Exception:
-        cevap = {"raw_response": response.text}
-
-    LOG_DIR.mkdir(exist_ok=True)
-    tarih = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_path = LOG_DIR / f"tsoft_api_stok_batch_{batch_no:03d}_{tarih}.json"
-
-    with open(log_path, "w", encoding="utf-8") as f:
-        json.dump(cevap, f, ensure_ascii=False, indent=4)
-
-    http_basarili = response.status_code in [200, 201, 202]
-    cevap_basarili = api_cevabi_basarili_mi(cevap)
+    if guncellenecek_stok < 0:
+        print("Guncellenecek stok negatif olamaz.")
+        raise SystemExit
 
     return {
-        "Batch": batch_no,
-        "Urun Sayisi": len(batch_df),
-        "HTTP": response.status_code,
-        "API Basari": "EVET" if http_basarili and cevap_basarili else "KONTROL",
-        "Log": str(log_path),
+        "ProductId": str(row["ProductId"]).strip(),
+        "ProductCode": temiz_product_code,
+        "Bayi Toplam Stok": bayi_toplam_stok,
+        "Guncellenecek Stok": guncellenecek_stok,
+        "Tedarikciler": str(row.get("Tedarikciler", "")).strip(),
+        "B2B Marka": str(row.get("B2B Marka", "")).strip(),
+        "DIA Stok": sayiya_cevir(row.get("DIA Stok", 0)),
+        "Sabit Stok": sayiya_cevir(row.get("Sabit Stok", 0)),
     }
+
+
+def api_stok_oku(site_url, token, product_code):
+    urun = urun_getir_product_code(site_url, token, product_code)
+    if not urun:
+        print(f"T-Soft API'de urun bulunamadi: {product_code}")
+        raise SystemExit
+
+    stok = urun_stok_degeri(urun)
+    if stok is None:
+        print("API cevabinda stok alani bulunamadi.")
+        raise SystemExit
+
+    return sayiya_cevir(stok), urun
+
+
+def tek_stok_gonder(site_url, token, product_id, product_code, stok):
+    df = pd.DataFrame([{
+        "ProductId": product_id,
+        "ProductCode": product_code,
+        "Guncellenecek Stok": int(stok),
+    }])
+    return stok_batch_gonder(site_url, token, 1, df)
+
+
+def main():
+    print("=== TEK URUN STOK GUNCELLEME ===")
+    product_code = input("Guncellenecek urun kodunu yaz: ").strip()
+    if not product_code:
+        print("Urun kodu bos birakildi. Islem iptal edildi.")
+        return
+
+    print()
+
+    TEST_DIR.mkdir(parents=True, exist_ok=True)
+    test_urunu = test_urununu_oku(product_code)
+
+    site_url, username, password = config_oku()
+    token = api_login(site_url, username, password)
+    eski_stok, _ = api_stok_oku(site_url, token, test_urunu["ProductCode"])
+
+    tarih = datetime.now().strftime("%Y%m%d_%H%M%S")
+    dosya_kodu = re.sub(r"[^A-Za-z0-9._-]+", "_", test_urunu["ProductCode"])
+    yedek_dosya = TEST_DIR / f"{dosya_kodu}_test_yedek_{tarih}.xlsx"
+    pd.DataFrame([{
+        "ProductId": test_urunu["ProductId"],
+        "ProductCode": test_urunu["ProductCode"],
+        "Eski Tsoft Stok": eski_stok,
+        "Testte Gonderilecek Stok": test_urunu["Guncellenecek Stok"],
+        "Bayi Toplam Stok": test_urunu["Bayi Toplam Stok"],
+        "Tedarikciler": test_urunu["Tedarikciler"],
+        "B2B Marka": test_urunu["B2B Marka"],
+        "DIA Stok": test_urunu["DIA Stok"],
+        "Sabit Stok": test_urunu["Sabit Stok"],
+    }]).to_excel(yedek_dosya, index=False)
+
+    print("ProductId:", test_urunu["ProductId"])
+    print("ProductCode:", test_urunu["ProductCode"])
+    print("Tedarikciler:", test_urunu["Tedarikciler"])
+    print("B2B Marka:", test_urunu["B2B Marka"])
+    print("T-Soft mevcut stok:", eski_stok)
+    print("Tum bayiler toplam stogu:", test_urunu["Bayi Toplam Stok"])
+    print("DIA stogu:", test_urunu["DIA Stok"])
+    print("Sabit stok:", test_urunu["Sabit Stok"])
+    print("API'ye gonderilecek stok:", test_urunu["Guncellenecek Stok"])
+    print("Geri alma yedegi:", yedek_dosya)
+    print()
+
+    beklenen_onay = f"{test_urunu['ProductCode']} GUNCELLE".upper()
+    onay = input(f"Devam etmek icin {beklenen_onay} yaz: ").strip().upper()
+    if onay != beklenen_onay:
+        print("Islem iptal edildi. API'ye stok gonderilmedi.")
+        return
+
+    sonuc = tek_stok_gonder(
+        site_url,
+        token,
+        test_urunu["ProductId"],
+        test_urunu["ProductCode"],
+        test_urunu["Guncellenecek Stok"],
+    )
+    print(f"Gonderim sonucu: HTTP {sonuc['HTTP']} / {sonuc['API Basari']}")
+
+    api_stok, _ = api_stok_oku(site_url, token, test_urunu["ProductCode"])
+    beklenen = test_urunu["Guncellenecek Stok"]
+    print("API'den okunan stok:", api_stok)
+    print("Kontrol:", "TAMAM" if api_stok == beklenen else "KONTROL ET")
+
+    if api_stok != beklenen:
+        print("Beklenen stok API'de gorulmedi. Log dosyasini kontrol et.")
+        return
+
+    print()
+    geri_onay = input(
+        "Yeni stok kalici kalsin istiyorsan ENTER; eski stoga donmek icin GERI AL yaz: "
+    ).strip().upper()
+    if geri_onay != "GERI AL":
+        print("Geri alma yapilmadi. Test stogu T-Soft'ta kaldi.")
+        return
+
+    geri_sonuc = tek_stok_gonder(
+        site_url,
+        token,
+        test_urunu["ProductId"],
+        test_urunu["ProductCode"],
+        eski_stok,
+    )
+    print(f"Geri alma sonucu: HTTP {geri_sonuc['HTTP']} / {geri_sonuc['API Basari']}")
+
+    geri_api_stok, _ = api_stok_oku(site_url, token, test_urunu["ProductCode"])
+    print("Geri alma sonrasi API stogu:", geri_api_stok)
+    print("Geri alma kontrol:", "TAMAM" if geri_api_stok == eski_stok else "KONTROL ET")
+
+
+if __name__ == "__main__":
+    main()

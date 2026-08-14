@@ -42,7 +42,7 @@ SANTRAL_DUZELTME_SAYILARI_FILE = CIKTI_DIR / "santral_duzeltme_sayilari.xlsx"
 SANTRAL_DUZELTME_SAYILARI_GUNCEL_FILE = CIKTI_DIR / "santral_duzeltme_sayilari_GUNCEL.xlsx"
 SANTRAL_SON_CALISMA_FILE = CIKTI_DIR / "santral_son_calisma.txt"
 
-KOD_SURUMU = "DIA_SABIT_KONYA_OPAS_PREFIX_V127_2026_07_21"
+KOD_SURUMU = "DIA_24_MARKA_WAGO_SABIT_V131_2026_08_11"
 
 # Kendi B2B aktariminda yalnizca tek marka bulunan tedarikciler. Bu kaynaklarda
 # marka kolonu olmasa veya ayarda farkli bir kolon yazsa bile tum satirlar ilgili
@@ -81,7 +81,26 @@ GUNCELLEMEYE_HIC_GONDERILMEYECEK_MARKALAR = {
 DIA_TOPLAMA_MARKALARI = {
     "WAGO": "WAGO",
     "ORTAC": "ORTAÇ",
+    "TBLOC": "TBLOC",
+    "PHOENIX C.": "PHOENIX CONTACT",
+    "SCHNEIDER E.": "SCHNEIDER ELECTRIC",
+    "NOAS": "NOAS",
+    "KETENCI": "KETENCİ",
+    "CETINKAYA": "ÇETİNKAYA",
+    "FINDER": "FINDER",
     "EMAS": "EMAS",
+    "LEGRAND": "LEGRAND",
+    "BEMIS": "BEMİS",
+    "WEILLER": "WEİLLER",
+    "TP ELECTRIC": "TP ELECTRIC",
+    "CATA": "CATA",
+    "TELEMECANIGUE": "TELEMECANIQUE SENSORS",
+    "EATON": "EATON",
+    "ISILDAR": "IŞILDAR",
+    "KRAUS & NAIMER": "KRAUS & NAIMER",
+    "SIEMENS": "SIEMENS",
+    "GWEST": "GWEST",
+    "ENTES": "ENTES",
     "OPAS": "OPAS",
     "MUCCO": "MUCCO",
 }
@@ -155,6 +174,25 @@ KOD_MARKA_ONCELIGI = {
     "MT221024": "SCHRACK",
     "PT570730": "SCHRACK",
     "PT570024": "SCHRACK",
+}
+
+# Fiyatlandirmada kodu ayni olsa bile baska bir urune ait marka satiri
+# kullanilamaz. Canli stok listesindeki tum kod onceliklerini burada topluca
+# kullanmiyoruz; fiyatlandirma icin dogrulanmis cakismalar ayri tutulur.
+FIYATLANDIRMA_KOD_MARKA_ONCELIGI = {
+    # KIRAC'taki SAFAK KM-240 bir kablo kesme makasidir. T-Soft'taki
+    # KARDES ELEKTRIK KM 240 ise ek muftur.
+    "KM 240": "KARDES ELEKTRIK",
+    # T-Soft'taki bu kisa kodlar GWEST'tir. Ayni kodlu NEAD urunleri farklidir.
+    "1010": "GWEST",
+    "2007": "GWEST",
+    "2008": "GWEST",
+    "4005": "GWEST",
+    "4007": "GWEST",
+    "4008": "GWEST",
+    "4009": "GWEST",
+    "4010": "GWEST",
+    "4011": "GWEST",
 }
 
 # YILDIZ B2B'deki OZN.001.xxx kodlari T-Soft kodunun kisaltilmis hali degildir;
@@ -312,8 +350,70 @@ def guncelleme_kaynagi_kurallarini_uygula(df):
     return sonuc[~haric_maskesi].copy()
 
 
+def fiyatlandirma_kaynagi_kurallarini_uygula(df):
+    """Fiyatlandırmada kullanılmasına izin verilen kaynak eşleşmelerini döndürür.
+
+    Canlı stok kurallarından bağımsız çalışır; fiyatlandırma eşleşme dosyasına
+    yalnızca fiyat hesabında kullanılmasına izin verilen bayi/sabit kaynakları
+    taşır.
+    """
+    if df is None:
+        return pd.DataFrame()
+    if df.empty or "Tedarikci" not in df.columns or "B2B Marka" not in df.columns:
+        return df.copy()
+
+    sonuc = df.copy()
+    tedarikci_norm = sonuc["Tedarikci"].apply(metin_norm)
+    marka_norm = sonuc["B2B Marka"].apply(
+        lambda deger: metin_norm(marka_adi_standart(deger))
+    )
+
+    # ACK, VIKO, ARTLINE ve THEA fiyatlandırmada da yalnızca YILDIZ'dan gelir.
+    yalniz_yildiz_maskesi = (
+        marka_norm.isin(YALNIZCA_YILDIZDAN_GUNCELLENECEK_MARKALAR)
+        & ~tedarikci_norm.eq("YILDIZ")
+    )
+    # HES için KONYA kaynağı hem stokta hem fiyatlandırmada kullanılmaz.
+    konya_hes_maskesi = tedarikci_norm.eq("KONYA") & marka_norm.eq("HES")
+    # SANTRAL bugünlük pasiftir ve fiyatlandırmaya da taşınmaz.
+    santral_maskesi = tedarikci_norm.eq("SANTRAL")
+    # ÖZNUR eşleşmeleri raporlansa bile fiyatlandırma hesabına hiç girmez.
+    oznur_maskesi = marka_norm.isin({"OZNUR", "OZNUR KABLO"})
+    # WAGO fiyatı B2B'den değil, yalnızca aşağıda eklenen WAGO SABİT'ten gelir.
+    wago_b2b_maskesi = marka_norm.eq("WAGO") & ~tedarikci_norm.eq("WAGO SABIT")
+
+    # Ayni kodu kullanan farkli marka/urunleri fiyatlandirmada birbirine
+    # baglama. Ornek: SAFAK KM-240 makasi, KARDES KM 240 ek muf degildir.
+    if "Web Servis Kodu" in sonuc.columns:
+        web_servis_kodu_norm = sonuc["Web Servis Kodu"].apply(metin_norm)
+        beklenen_marka = web_servis_kodu_norm.map(
+            FIYATLANDIRMA_KOD_MARKA_ONCELIGI
+        )
+        kod_marka_cakisma_maskesi = (
+            beklenen_marka.notna()
+            & marka_norm.ne(beklenen_marka.fillna(""))
+        )
+    else:
+        kod_marka_cakisma_maskesi = pd.Series(False, index=sonuc.index)
+
+    haric_maskesi = (
+        yalniz_yildiz_maskesi
+        | konya_hes_maskesi
+        | santral_maskesi
+        | oznur_maskesi
+        | wago_b2b_maskesi
+        | kod_marka_cakisma_maskesi
+    )
+    return sonuc[~haric_maskesi].copy()
+
+
 def kod_temizle(kod):
     return metin_norm(kod)
+
+
+def sabit_fiyat_kodu_temizle(kod):
+    """Sabit fiyat dosyalarındaki yalnızca yazım amaçlı boşlukları yok sayar."""
+    return re.sub(r"\s+", "", kod_temizle(kod))
 
 
 def marka_uygun_mu(marka, marka_filtresi):
@@ -7235,8 +7335,8 @@ def _liste_degerine_ekle(mevcut, eklenecek, ayirici=", "):
 def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
     """Marka bazinda izinli stok kaynaklarini tek toplamda birlestirir.
 
-    WAGO, ORTAC ve EMAS icin B2B + DIA + sabit stok; OPAS ve MUCCO icin
-    yalnizca B2B + DIA kullanilir.
+    WAGO yalnizca DIA + sabit stok kullanir. Diger sabit stok markalarinda
+    B2B + DIA + sabit stok; kalan DIA markalarinda B2B + DIA kullanilir.
     """
     sonuc = hazir_df.copy()
     for kolon in ["DIA Stok", "Sabit Stok"]:
@@ -7251,6 +7351,17 @@ def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
     sonuc_marka_norm = sonuc["B2B Marka"].apply(
         lambda deger: metin_norm(marka_adi_standart(deger))
     )
+    wago_maskesi = sonuc_marka_norm.eq("WAGO")
+    # WAGO stoklarına hiçbir B2B katkısı taşınmaz; yalnızca DIA ve Wago.xlsx
+    # sabit stokları aşağıdaki eşleştirme adımında eklenir.
+    sonuc.loc[wago_maskesi, "Bayi Toplam Stok"] = 0
+    for kolon, deger in [
+        ("Tedarikciler", ""),
+        ("B2B Kodları", ""),
+        ("Kaynak Satır Sayısı", 0),
+    ]:
+        if kolon in sonuc.columns:
+            sonuc.loc[wago_maskesi, kolon] = deger
     hedef_maskesi = sonuc_marka_norm.isin(hedef_marka_normlari)
     sonuc.loc[hedef_maskesi, "Guncellenecek Stok"] = (
         pd.to_numeric(sonuc.loc[hedef_maskesi, "Bayi Toplam Stok"], errors="coerce")
@@ -7418,11 +7529,12 @@ def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
     }
     for marka_norm in sorted(hedef_marka_normlari):
         marka_sonuc = sonuc[sonuc_marka_norm.eq(marka_norm)]
-        kaynak_etiketi = (
-            "DIA/Sabit/B2B"
-            if marka_norm in sabit_marka_normlari
-            else "DIA/B2B"
-        )
+        if marka_norm == "WAGO":
+            kaynak_etiketi = "DIA/Sabit"
+        elif marka_norm in sabit_marka_normlari:
+            kaynak_etiketi = "DIA/Sabit/B2B"
+        else:
+            kaynak_etiketi = "DIA/B2B"
         print(
             f"{marka_adi_standart(marka_norm)} {kaynak_etiketi} toplam urunu:",
             len(marka_sonuc),
@@ -9093,6 +9205,9 @@ def raporlari_kaydet(
     fiyatlandirma_eslesme_df = tedarikci_bazli_df.reindex(
         columns=fiyatlandirma_kolonlari
     ).copy()
+    fiyatlandirma_eslesme_df = fiyatlandirma_kaynagi_kurallarini_uygula(
+        fiyatlandirma_eslesme_df
+    )
 
     # B2B fiyat eşleşmesi bulunmayan fakat DIA/SabitStok kuralıyla stok
     # güncellemesine giden EMAS ve ORTAÇ ürünlerini kendi fiyat dosyalarından
@@ -9104,9 +9219,6 @@ def raporlari_kaydet(
         stok_guncelleme_df = pd.read_excel(
             stok_guncelleme_dosya, dtype=str
         ).fillna("")
-        mevcut_fiyat_pidleri = set(
-            fiyatlandirma_eslesme_df["ProductId"].astype(str).str.strip()
-        )
         sabit_hedefler = stok_guncelleme_df[
             stok_guncelleme_df["Guncelleme Durumu"]
             .astype(str)
@@ -9115,14 +9227,15 @@ def raporlari_kaydet(
         ].copy()
         sabit_hedefler["Marka Norm"] = sabit_hedefler["B2B Marka"].apply(metin_norm)
         sabit_hedefler["Temiz Kod"] = sabit_hedefler["Web Servis Kodu"].apply(
-            kod_temizle
+            sabit_fiyat_kodu_temizle
         )
         sabit_hedefler = sabit_hedefler[
             sabit_hedefler["Marka Norm"].isin({"WAGO", "EMAS", "ORTAC"})
-            & ~sabit_hedefler["ProductId"].astype(str).str.strip().isin(
-                mevcut_fiyat_pidleri
-            )
         ].copy()
+        # WAGO, EMAS ve ORTAÇ sabit Excel fiyatları her zaman fiyatlandırmaya
+        # katılır. EMAS'ta Satış Fiyatı + Alış İskonto; ORTAÇ'ta Liste Fiyatı +
+        # İskonto (alış iskontosu) kullanılarak net alış hesaplanır. Ürünün başka
+        # bir B2B eşleşmesinin bulunması sabit alış kaynağını devre dışı bırakmaz.
         hedef_haritasi = {
             (row["Marka Norm"], row["Temiz Kod"]): row
             for _, row in sabit_hedefler.iterrows()
@@ -9143,7 +9256,9 @@ def raporlari_kaydet(
                     f"{dosya.name} içinde fiyatlandırma için ürün kodu bulunamadı"
                 )
             for kaynak_index, kaynak_row in kaynak_df.iterrows():
-                temiz_kod = kod_temizle(kaynak_row.get(kod_kolonu, ""))
+                temiz_kod = sabit_fiyat_kodu_temizle(
+                    kaynak_row.get(kod_kolonu, "")
+                )
                 hedef = hedef_haritasi.get((marka_norm, temiz_kod))
                 if hedef is None:
                     continue
@@ -9555,6 +9670,16 @@ def main():
         })
 
     tedarikci_bazli_df = pd.DataFrame(tedarikci_bazli_satirlar)
+    if not tedarikci_bazli_df.empty and "B2B Marka" in tedarikci_bazli_df.columns:
+        wago_b2b_maskesi = tedarikci_bazli_df["B2B Marka"].apply(metin_norm).eq(
+            "WAGO"
+        )
+        if wago_b2b_maskesi.any():
+            print(
+                "WAGO B2B eşleşmeleri stok ve fiyat akışından çıkarıldı: "
+                f"{int(wago_b2b_maskesi.sum())}"
+            )
+            tedarikci_bazli_df = tedarikci_bazli_df[~wago_b2b_maskesi].copy()
     b2bde_var_sitede_yok_df = pd.DataFrame(b2bde_var_sitede_yok_satirlar)
     santral_eslesme_bekleyen_df = pd.DataFrame(santral_eslesme_bekleyen_satirlar)
     bos_kod_df = pd.DataFrame(bos_kod_satirlar)

@@ -28,10 +28,180 @@ TSOFT_DOSYASI = BASE_DIR / "Tsoft" / "tsoft_secili_alanlar.xlsx"
 ESLESME_DOSYASI = BASE_DIR / "Cikti" / "fiyatlandirma_eslesme_listesi.xlsx"
 CIKTI_DOSYASI = BASE_DIR / "Cikti" / "fiyat_onay_listesi.xlsx"
 RAKIP_DIZINI = BASE_DIR / "Rakipler"
+KATEGORI_KAR_ORANI_DOSYASI = BASE_DIR / "Ayarlar" / "kategori_kar_oranlari.xlsx"
+PAKET_BIRIM_AYAR_DOSYASI = BASE_DIR / "Ayarlar" / "paket_birim_ayarlari.xlsx"
+KATEGORI_KAR_YEDEK_DOSYASI = Path.home() / "OneDrive" / "Desktop" / "karyedek.xlsx"
 ENTES_FIYAT_LISTESI_DOSYASI = (
     BASE_DIR / "FiyatListesi" / "ENTES_FIYAT_LISTESI.xlsx"
 )
 TCMB_KUR_URL = "https://www.tcmb.gov.tr/kurlar/today.xml"
+GENEL_MIN_KAR_ORANI = Decimal("7")
+
+# T-Soft'ta bu kisa kodlar GWEST urunleridir. Ayni kodlari kullanan NEAD
+# urunleri hem B2B alisinda hem rakip eslestirmesinde bu urunlere baglanamaz.
+FIYATLANDIRMA_KOD_MARKA_ONCELIGI = {
+    # KIRAC/Elektrix'teki SAFAK KM-240 kablo makasi, T-Soft'taki
+    # KARDES ELEKTRIK KM 240 ek muf ile ayni urun degildir.
+    "KM 240": "KARDES ELEKTRIK",
+    # Uc Faz'daki ayni kodlu VIKO telefon prizi, T-Soft'taki ARTLINE VGA
+    # kapagiyla ayni urun degildir. Bu kodda yalniz ARTLINE rakibi kabul edilir.
+    "92605513": "ARTLINE",
+    "1010": "GWEST",
+    "2007": "GWEST",
+    "2008": "GWEST",
+    "4005": "GWEST",
+    "4007": "GWEST",
+    "4008": "GWEST",
+    "4009": "GWEST",
+    "4010": "GWEST",
+    "4011": "GWEST",
+}
+
+# Dogrulanmis yanlis paket kurallari. Bu satirlar kaynak ayar dosyasinda kalsa
+# bile fiyat hesabina ve yeni raporun Paket Birim Ayarlari sayfasina alinmaz.
+GECERSIZ_PAKET_BIRIM_KURALLARI = {
+    # T-Soft KARDES KM 240 ek muf; KIRAC/ELEKTRIX KM-240 ise SAFAK makastir.
+    ("KM 240", "KIRAC", "ALIS"),
+    ("KM 240", "ELEKTRIX", "RAKIP"),
+    # KONYA 570040 fiyati zaten tek adet icindir; yalniz rakipteki 500'lu
+    # paket fiyati bolunmelidir.
+    ("570040", "KONYA", "ALIS"),
+    # Bu iki KONYA fiyati da tek adet icindir; 100'lu paket yalniz rakip
+    # Elektrik Malzemesi fiyatinda uygulanir.
+    ("590024", "KONYA", "ALIS"),
+    ("591012", "KONYA", "ALIS"),
+    # Eski kurallar ayni kodlu NEAD fiyatlarini GWEST paket adedine boluyordu.
+    # GWEST B2B liste fiyatlari zaten birimdir; yalniz paketli rakipler bolunur.
+    ("1010", "KONYA", "ALIS"),
+    ("2007", "YILDIZ", "ALIS"),
+    ("2008", "YILDIZ", "ALIS"),
+    ("4005", "YILDIZ", "ALIS"),
+    ("4005", "STAR AKIM", "RAKIP"),
+    ("4007", "KONYA", "ALIS"),
+    ("4008", "YILDIZ", "ALIS"),
+}
+
+# Kaynak urun adindan ve rakip sayfasindan elle dogrulanmis paket fiyatlari.
+# Bu kurallar ayar Excel'i yenilense bile kaybolmaz.
+DOGRULANMIS_RAKIP_PAKET_KURALLARI = {
+    # Buyuk Kalpler satis fiyati 5 metrelik paketin tamamidir.
+    ("YL42-1219", "BUYUK KALPLER"): Decimal("5"),
+}
+
+
+def paket_birim_ayarlarini_oku(dosya: Path = PAKET_BIRIM_AYAR_DOSYASI) -> dict:
+    """Onaylanmış ürün+firma paket fiyatlarını birim fiyata dönüştürme haritasını okur."""
+    dosya = Path(dosya)
+    sonuc = {"alis": {}, "alis_marka": {}, "rakip": {}, "satirlar": []}
+    if not dosya.exists():
+        return sonuc
+    df = pd.read_excel(
+        dosya,
+        sheet_name="Paket Birim Ayarları",
+        header=2,
+        dtype=str,
+    ).fillna("")
+    gerekli = {
+        "Aktif", "ProductId", "Marka", "Kategori", "Ürün Web Servis Kodu",
+        "Firma", "Kaynak Türü", "Paket Adedi", "Fiyatın Kapsadığı Adet",
+        "Kontrol Durumu",
+    }
+    eksik = gerekli - set(df.columns)
+    if eksik:
+        raise ValueError(
+            "paket_birim_ayarlari.xlsx eksik kolonlar: " + ", ".join(sorted(eksik))
+        )
+    for _, row in df.iterrows():
+        kayit = {kolon: str(row.get(kolon, "")).strip() for kolon in gerekli}
+        if metin_norm(kayit["Aktif"]) != "EVET":
+            continue
+        if metin_norm(kayit["Kontrol Durumu"]) != "ONAYLANDI":
+            continue
+        kod = metin_norm(kayit["Ürün Web Servis Kodu"])
+        firma = metin_norm(kayit["Firma"])
+        tur = metin_norm(kayit["Kaynak Türü"])
+        if (kod, firma, tur) in GECERSIZ_PAKET_BIRIM_KURALLARI:
+            continue
+        kapsam = ondalik(kayit["Fiyatın Kapsadığı Adet"])
+        paket = ondalik(kayit["Paket Adedi"], Decimal("1")) or Decimal("1")
+        if not kod or not firma or kapsam is None or kapsam <= 0:
+            raise ValueError(
+                "Paket birim ayarında kod, firma veya kapsadığı adet hatalı: "
+                f"{kayit}"
+            )
+        if tur == "ALIS":
+            hedef = sonuc["alis"]
+        elif tur == "RAKIP":
+            hedef = sonuc["rakip"]
+        else:
+            raise ValueError(f"Paket birim ayarında geçersiz Kaynak Türü: {tur}")
+        hedef[(kod, firma)] = kapsam
+        if tur == "ALIS":
+            sonuc["alis_marka"][(kod, firma)] = metin_norm(kayit["Marka"])
+        sonuc["satirlar"].append({
+            **kayit,
+            "Paket Adedi": paket,
+            "Fiyatın Kapsadığı Adet": kapsam,
+        })
+    for anahtar, kapsam in DOGRULANMIS_RAKIP_PAKET_KURALLARI.items():
+        norm_anahtar = (metin_norm(anahtar[0]), metin_norm(anahtar[1]))
+        sonuc["rakip"][norm_anahtar] = kapsam
+        if not any(
+            metin_norm(satir.get("Ürün Web Servis Kodu", "")) == norm_anahtar[0]
+            and metin_norm(satir.get("Firma", "")) == norm_anahtar[1]
+            and metin_norm(satir.get("Kaynak Türü", "")) == "RAKIP"
+            for satir in sonuc["satirlar"]
+        ):
+            sonuc["satirlar"].append({
+                "Aktif": "EVET",
+                "ProductId": "",
+                "Marka": "NOAS",
+                "Kategori": "Neon Ledler",
+                "Ürün Web Servis Kodu": anahtar[0],
+                "Firma": "BÜYÜK KALPLER",
+                "Kaynak Türü": "RAKİP",
+                "Paket Adedi": kapsam,
+                "Fiyatın Kapsadığı Adet": kapsam,
+                "Kontrol Durumu": "ONAYLANDI",
+            })
+    return sonuc
+
+
+def paket_fiyatini_birime_cevir(
+    kayit: dict,
+    ayarlar: dict,
+    kod,
+    firma,
+    kaynak_turu: str,
+    marka="",
+) -> dict:
+    """Fiyat alanlarını, ayarda belirtilen kapsadığı adede bölerek birim baza getirir."""
+    harita = ayarlar.get("paket_birim", {}).get(kaynak_turu, {})
+    anahtar = (metin_norm(kod), metin_norm(firma))
+    kapsam = harita.get(anahtar)
+    if kaynak_turu == "alis":
+        beklenen_marka = ayarlar.get("paket_birim", {}).get(
+            "alis_marka", {}
+        ).get(anahtar, "")
+        gelen_marka = metin_norm(marka)
+        if beklenen_marka and gelen_marka and beklenen_marka not in gelen_marka:
+            return kayit
+    if kapsam is None or kapsam <= 1:
+        return kayit
+    sonuc = dict(kayit)
+    fiyat_alanlari = (
+        ("liste_tl", "net_tl_kdv_haric")
+        if kaynak_turu == "alis"
+        else ("satis_fiyati", "net_satis_kdv_haric")
+    )
+    for alan in fiyat_alanlari:
+        deger = ondalik(sonuc.get(alan))
+        if deger is not None:
+            sonuc[alan] = (deger / kapsam).quantize(
+                Decimal("0.0001"), rounding=ROUND_HALF_UP
+            )
+    sonuc["paket_birim_kapsam"] = kapsam
+    return sonuc
 
 KOLON_ADAYLARI = {
     "liste": [
@@ -45,6 +215,16 @@ KOLON_ADAYLARI = {
         "List Price",
     ],
     "iskonto": [
+        "Alış İskontosu",
+        "Alış İskonto",
+        "Alış İskonto %",
+        "Alış İskonto Oranı",
+        "Alis Iskontosu",
+        "Alis Iskonto",
+        "Alis Iskonto %",
+        "Alis Iskonto Orani",
+        "Alış İndirim",
+        "Alis Indirim",
         "İskonto",
         "İskonto %",
         "İskonto oranları",
@@ -56,12 +236,31 @@ KOLON_ADAYLARI = {
         "Iskonto Orani",
         "Discount",
     ],
+    "aksiyon_fiyat": [
+        "Aksiyon Fiyat",
+        "Aksiyon Fiyatı",
+        "Aksiyon Fiyati",
+        "AksiyonFiyati",
+        "Kampanya Fiyat",
+        "Kampanya Fiyatı",
+        "Kampanya Fiyati",
+    ],
     "min_paket": [
         "Min. Paket Adedi",
         "Min Paket Adedi",
         "Minimum Paket Adedi",
         "Paket Adedi",
         "Kutu Adedi",
+    ],
+    "stok": [
+        "Stok",
+        "Stok Adedi",
+        "Stok Adeti",
+        "Stok Miktarı",
+        "Stok Miktari",
+        "Miktar",
+        "Mevcut Stok",
+        "Kalan Stok",
     ],
     "para_birimi": [
         "Para Birimi",
@@ -649,6 +848,15 @@ def metin_norm(deger) -> str:
     metin = unicodedata.normalize("NFKD", metin)
     metin = "".join(c for c in metin if not unicodedata.combining(c))
     return re.sub(r"[^A-Z0-9]+", " ", metin).strip()
+
+
+def tsoft_aktiflik_durumu(deger) -> str:
+    norm = metin_norm(deger)
+    if norm in {"1", "TRUE", "ACTIVE", "AKTIF", "EVET"}:
+        return "AKTİF"
+    if norm in {"0", "FALSE", "INACTIVE", "PASIF", "HAYIR"}:
+        return "PASİF"
+    return "BİLİNMİYOR"
 
 
 def zeybek_kod_anlamli_mi(kod: str) -> bool:
@@ -2087,6 +2295,14 @@ def elextrix_tsoft_kodu(
     """Elextrix marka önekini yalnızca tekil bir T-Soft koduna ulaşıyorsa kaldırır."""
     kaynak_marka = metin_norm(marka)
     kaynak_kod = metin_norm(kod)
+
+    # SAFAK-KM240 kablo kesme makasidir. T-Soft'taki KM 240 kodu KARDES
+    # ELEKTRIK ek mufa aittir; kompakt kod benzerligiyle eslestirilmemeli.
+    if (
+        kaynak_marka == metin_norm("SAFAK ELEKTRIK")
+        and re.sub(r"[^A-Z0-9]", "", kaynak_kod) == "SAFAKKM240"
+    ):
+        return ""
     if kaynak_marka == metin_norm("SIEMENS"):
         onayli_eslesmeler = {
             metin_norm(kaynak): metin_norm(hedef)
@@ -2157,6 +2373,45 @@ def ondalik(deger, varsayilan=None):
         metin = metin.replace(",", ".")
     try:
         return Decimal(metin)
+    except InvalidOperation:
+        return varsayilan
+
+
+def stok_degerini_oku(deger, varsayilan=None):
+    """B2B stok metnini birim ve Turkce binlik ayiraciyla birlikte okur.
+
+    Ornekler: ``28.000 AD.`` -> 28000, ``1.018 ADET`` -> 1018,
+    ``2,5`` -> 2.5. Fiyatlar icin kullanilan genel ``ondalik`` fonksiyonundan
+    ayridir; stok alanindaki tek nokta + uc hane binlik ayiraci kabul edilir.
+    """
+    if deger is None or pd.isna(deger):
+        return varsayilan
+    metin = str(deger).strip().replace("\xa0", " ")
+    if not metin or metin.lower() == "nan":
+        return varsayilan
+    if any(ifade in metin_norm(metin) for ifade in ("YOK", "TUKENDI")):
+        return Decimal("0")
+    eslesme = re.search(r"-?\d+(?:[.,]\d+)*", metin)
+    if not eslesme:
+        return varsayilan
+    sayi = eslesme.group(0)
+    if "," in sayi and "." in sayi:
+        if sayi.rfind(",") > sayi.rfind("."):
+            sayi = sayi.replace(".", "").replace(",", ".")
+        else:
+            sayi = sayi.replace(",", "")
+    elif "." in sayi:
+        parcalar = sayi.split(".")
+        if len(parcalar) > 1 and all(len(parca) == 3 for parca in parcalar[1:]):
+            sayi = "".join(parcalar)
+    elif "," in sayi:
+        parcalar = sayi.split(",")
+        if len(parcalar) > 1 and all(len(parca) == 3 for parca in parcalar[1:]):
+            sayi = "".join(parcalar)
+        else:
+            sayi = sayi.replace(",", ".")
+    try:
+        return Decimal(sayi)
     except InvalidOperation:
         return varsayilan
 
@@ -2337,28 +2592,78 @@ def kaynak_fiyatini_oku(
     kolonlar = {alan: kolon_bul(df.columns, adaylar) for alan, adaylar in KOLON_ADAYLARI.items()}
     liste_ham = row.get(kolonlar["liste"], "") if kolonlar["liste"] else ""
     iskonto_ham = row.get(kolonlar["iskonto"], "") if kolonlar["iskonto"] else ""
-    min_paket_ham = row.get(kolonlar["min_paket"], "") if kolonlar["min_paket"] else ""
-    para_ham = row.get(kolonlar["para_birimi"], "") if kolonlar["para_birimi"] else ""
-    liste = ondalik(liste_ham)
-    if liste is None or liste <= 0:
-        raise ValueError("Liste fiyatı boş veya sıfır")
-    doviz = para_birimi_bul(liste_ham, para_ham)
-    kur = ayarlar["kurlar"].get(doviz)
-    if kur is None:
-        raise ValueError(f"{doviz} kuru ayarlanmamış")
-    liste_tl = (liste * kur).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-    iskonto_yuzde = etkin_iskonto_yuzde(iskonto_ham)
-    net_tl_kdv_haric = (liste * iskonto_carpani(iskonto_ham) * kur).quantize(
-        Decimal("0.01"), rounding=ROUND_HALF_UP
+    aksiyon_ham = (
+        row.get(kolonlar["aksiyon_fiyat"], "")
+        if kolonlar["aksiyon_fiyat"]
+        else ""
     )
+    min_paket_ham = row.get(kolonlar["min_paket"], "") if kolonlar["min_paket"] else ""
+    stok_ham = row.get(kolonlar["stok"], "") if kolonlar["stok"] else ""
+    para_ham = row.get(kolonlar["para_birimi"], "") if kolonlar["para_birimi"] else ""
+    aksiyon_fiyat = ondalik(aksiyon_ham)
+    liste = ondalik(liste_ham)
+    if (liste is None or liste <= 0) and (
+        aksiyon_fiyat is None or aksiyon_fiyat <= 0
+    ):
+        raise ValueError("Liste fiyatı ve aksiyon fiyatı boş veya sıfır")
+
+    if aksiyon_fiyat is not None and aksiyon_fiyat > 0:
+        aksiyon_doviz = para_birimi_bul(aksiyon_ham, para_ham)
+        aksiyon_kur = ayarlar["kurlar"].get(aksiyon_doviz)
+        if aksiyon_kur is None:
+            raise ValueError(f"{aksiyon_doviz} kuru ayarlanmamış")
+        # Aksiyon fiyatı net alış fiyatıdır; alış iskontosu ikinci kez uygulanmaz.
+        iskonto_yuzde = None
+        net_tl_kdv_haric = (aksiyon_fiyat * aksiyon_kur).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        if liste is not None and liste > 0:
+            doviz = para_birimi_bul(liste_ham, para_ham)
+            kur = ayarlar["kurlar"].get(doviz)
+            if kur is None:
+                raise ValueError(f"{doviz} kuru ayarlanmamış")
+            liste_tl = (liste * kur).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        else:
+            doviz = aksiyon_doviz
+            liste_tl = net_tl_kdv_haric
+    else:
+        doviz = para_birimi_bul(liste_ham, para_ham)
+        kur = ayarlar["kurlar"].get(doviz)
+        if kur is None:
+            raise ValueError(f"{doviz} kuru ayarlanmamış")
+        liste_tl = (liste * kur).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        iskonto_yuzde = etkin_iskonto_yuzde(iskonto_ham)
+        net_tl_kdv_haric = (liste * iskonto_carpani(iskonto_ham) * kur).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
     min_paket = ondalik(min_paket_ham, Decimal("1")) or Decimal("1")
+    stok = stok_degerini_oku(stok_ham)
     return {
         "liste_tl": liste_tl,
         "iskonto_yuzde": iskonto_yuzde,
         "net_tl_kdv_haric": net_tl_kdv_haric,
         "min_paket": min_paket,
+        "stok": stok,
         "doviz": doviz,
+        "aksiyon_fiyati_kullanildi": aksiyon_fiyat is not None and aksiyon_fiyat > 0,
     }
+
+
+def wago_b2b_fiyat_satirlarini_cikar(eslesme: pd.DataFrame) -> pd.DataFrame:
+    """WAGO SABİT dışındaki WAGO B2B fiyat kaynaklarını kaldırır."""
+    sonuc = eslesme.copy()
+    marka_kolonu = kolon_bul(sonuc.columns, ["B2B Marka", "Marka"])
+    tedarikci_kolonu = kolon_bul(sonuc.columns, ["Tedarikci", "Tedarikçi"])
+    if not marka_kolonu or not tedarikci_kolonu:
+        return sonuc
+    wago_b2b = sonuc[marka_kolonu].apply(metin_norm).eq("WAGO") & ~sonuc[
+        tedarikci_kolonu
+    ].apply(metin_norm).eq("WAGO SABIT")
+    return sonuc[~wago_b2b].copy()
 
 
 def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
@@ -2625,14 +2930,12 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
                     ucfaz_hedef_kodlari = tsoft_ucfaz_marka_urunleri[
                         rakip_marka
                     ].get("kodlar", set())
-                    kompakt_kod = re.sub(r"[^A-Z0-9]", "", kod)
-                    if (
-                        kompakt_kod.isdigit()
-                        and len(kompakt_kod) < 6
-                        and kod not in ucfaz_hedef_kodlari
-                    ):
-                        # 1004, 2001 gibi kısa sayısal kodlar markalar arasında
-                        # çakışabildiğinden yalnız aynı marka içinde kabul edilir.
+                    if kod not in ucfaz_hedef_kodlari:
+                        # Uc Faz'da ayni kod farkli markalarda farkli urunleri
+                        # gosterebilir. Dogrudan kodu yalniz rakip markasinin
+                        # T-Soft urunleri arasinda varsa kabul et. Ornek:
+                        # VIKO 92605513 telefon prizi, ARTLINE 92605513 VGA
+                        # kapagiyla ayni urun degildir.
                         kod_anahtarlari.discard(kod)
                 if (
                     firma_norm == metin_norm("KOZ AYDINLATMA")
@@ -3012,14 +3315,25 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
                     ),
                 }
                 for kod_anahtari in kod_anahtarlari:
+                    beklenen_marka = FIYATLANDIRMA_KOD_MARKA_ONCELIGI.get(
+                        metin_norm(kod_anahtari)
+                    )
+                    if (
+                        beklenen_marka
+                        and metin_norm(rakip_marka) != metin_norm(beklenen_marka)
+                    ):
+                        continue
                     anahtar = (firma_norm, kod_anahtari)
+                    ayarlanmis_kayit = paket_fiyatini_birime_cevir(
+                        kayit, ayarlar, kod_anahtari, firma_norm, "rakip"
+                    )
                     onceki = harita.get(anahtar)
                     if (
                         onceki is None
-                        or kayit["net_satis_kdv_haric"]
+                        or ayarlanmis_kayit["net_satis_kdv_haric"]
                         < onceki["net_satis_kdv_haric"]
                     ):
-                        harita[anahtar] = kayit
+                        harita[anahtar] = ayarlanmis_kayit
         except Exception as exc:
             hatalar.append(
                 {
@@ -3056,6 +3370,7 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
     eslesme_adaylari = {
         "ProductId": ["ProductId"],
         "Web Servis Kodu": ["Web Servis Kodu"],
+        "B2B Marka": ["B2B Marka"],
         "Tedarikci": ["Tedarikci", "Tedarikçi"],
         "B2B Kaynak Dosya": ["B2B Kaynak Dosya"],
         "B2B Satır No": ["B2B Satır No", "B2B Satir No", "B2B SatÄ±r No"],
@@ -3067,10 +3382,44 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
             yeniden_adlandir[bulunan] = standart
     if yeniden_adlandir:
         eslesme = eslesme.rename(columns=yeniden_adlandir)
+    eslesme = wago_b2b_fiyat_satirlarini_cikar(eslesme)
     gerekli = list(eslesme_adaylari)
     eksik = [k for k in gerekli if k not in eslesme.columns]
     if eksik:
         raise ValueError(f"Eşleşme dosyasında eksik kolonlar: {', '.join(eksik)}")
+
+    # Marka cakismasi nedeniyle tum B2B satirlari elense bile T-Soft urunu
+    # raporda kalir ve ALIS FIYATI YOK olarak gorunur.
+    urun_anahtarlari = eslesme[["ProductId", "Web Servis Kodu"]].drop_duplicates().copy()
+
+    # Paket ayarinda marka belirtilmisse ayni urun+bayi icindeki kod cakismasinda
+    # yalniz o markaya ait kaynak satirini kullan. Ornek: YILDIZ'da hem GWEST
+    # 2008 hem NEAD 2008 ayni T-Soft urunune eslesebiliyor; NEAD paket ayari
+    # GWEST fiyatina uygulanmamali ve iki marka ayni bayi ortalamasina karismamali.
+    paket_alis_markalari = ayarlar.get("paket_birim", {}).get("alis_marka", {})
+    if paket_alis_markalari and "B2B Marka" in eslesme.columns:
+        tutulacak = pd.Series(True, index=eslesme.index)
+        for (kod_norm, firma_norm), beklenen_marka in paket_alis_markalari.items():
+            aday = (
+                eslesme["Web Servis Kodu"].apply(metin_norm).eq(kod_norm)
+                & eslesme["Tedarikci"].apply(metin_norm).eq(firma_norm)
+            )
+            marka_uyumlu = aday & eslesme["B2B Marka"].apply(metin_norm).apply(
+                lambda gelen: bool(gelen) and beklenen_marka in gelen
+            )
+            if marka_uyumlu.any():
+                tutulacak.loc[aday & ~marka_uyumlu] = False
+        eslesme = eslesme[tutulacak].copy()
+
+    # Eslesme dosyasi daha once uretilmis olsa bile dogrulanmis kisa kod/marka
+    # cakismalarini rapor olusturulurken yeniden engelle.
+    kod_norm = eslesme["Web Servis Kodu"].apply(metin_norm)
+    marka_norm = eslesme["B2B Marka"].apply(metin_norm)
+    beklenen_marka = kod_norm.map(FIYATLANDIRMA_KOD_MARKA_ONCELIGI)
+    eslesme = eslesme[
+        beklenen_marka.isna()
+        | marka_norm.eq(beklenen_marka.fillna("").apply(metin_norm))
+    ].copy()
     product_map, kod_map = tsoft_haritasi_olustur(tsoft)
     cache, fiyatlar, hatalar, tedarikciler = {}, {}, [], set()
 
@@ -3087,6 +3436,14 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
                 row.get("B2B Satır No", ""),
                 cache,
                 ayarlar,
+            )
+            fiyat = paket_fiyatini_birime_cevir(
+                fiyat,
+                ayarlar,
+                kod,
+                tedarikci,
+                "alis",
+                row.get("B2B Marka", ""),
             )
             anahtar = (pid, tedarikci)
             if (
@@ -3107,7 +3464,6 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
             )
 
     urunler = []
-    urun_anahtarlari = eslesme[["ProductId", "Web Servis Kodu"]].drop_duplicates()
     for _, kimlik in urun_anahtarlari.iterrows():
         pid = str(kimlik["ProductId"]).strip()
         kod = str(kimlik["Web Servis Kodu"]).strip()
@@ -3116,8 +3472,10 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
             (eslesme["ProductId"].astype(str).str.strip() == pid)
             & (eslesme["Web Servis Kodu"].astype(str).str.strip() == kod)
         ]
-        marka = ""
+        marka = FIYATLANDIRMA_KOD_MARKA_ONCELIGI.get(metin_norm(kod), "")
         for kolon in ("B2B Marka", "Marka"):
+            if marka:
+                break
             if kolon in eslesen_satirlar.columns:
                 degerler = eslesen_satirlar[kolon].astype(str).str.strip()
                 degerler = degerler[(degerler != "") & (degerler.str.lower() != "nan")]
@@ -3130,6 +3488,10 @@ def fiyat_verisini_hazirla(eslesme: pd.DataFrame, tsoft: pd.DataFrame, ayarlar: 
             "Kategori": ts.get("Ana Kategori Adı", ""),
             "Web Servis Kodu": kod,
             "Ürün Adı": ts.get("Ürün Adı", "") or ts.get("Model", ""),
+            "Stok": ts.get("Stok", ""),
+            "T-SOFT AKTİFLİK": tsoft_aktiflik_durumu(
+                ts.get("T-SOFT AKTİFLİK", ts.get("IsActive", ""))
+            ),
             "Fiyat Birimi": ts.get("Fiyat Birimi", "TRY") or "TRY",
             "T-SOFT LİSTE FİYATI": ondalik(ts.get("T-SOFT LİSTE FİYATI", "")),
             "T-SOFT İNDİRİMLİ FİYATI": ondalik(
@@ -3161,6 +3523,560 @@ def rakip_stokta_var_mi(stok) -> bool:
     }
 
 
+def alis_kaynagi_kullanilabilir_mi(
+    fiyat: dict | None,
+    *,
+    tek_kaynak: bool = False,
+) -> bool:
+    """Ürünün kaynak sayısına göre kullanılabilir alış fiyatını belirler.
+
+    Birden fazla kaynak varsa yalnız stoklu ve pozitif alış iskontolu kaynak
+    hesaba girer. Ürün yalnız tek kaynakta bulunuyorsa stok olmasa da pozitif
+    liste + pozitif iskonto ile hesaplanan net alış kullanılabilir. İskontosu
+    yüzde 0/boş olan normal kayıt hiçbir durumda kullanılmaz. Açık aksiyon
+    fiyatı ise mevcut davranışı korur ve yalnız stok varsa doğrudan net alış
+    istisnası olarak kullanılır.
+    """
+    if not fiyat:
+        return False
+    net = ondalik(fiyat.get("net_tl_kdv_haric"))
+    if net is None or net <= 0:
+        return False
+    iskonto = ondalik(fiyat.get("iskonto_yuzde"))
+    stok = ondalik(fiyat.get("stok"))
+    stoklu = stok is not None and stok > 0
+    if fiyat.get("aksiyon_fiyati_kullanildi") is True:
+        return stoklu
+    liste = ondalik(fiyat.get("liste_tl"))
+    pozitif_liste_iskonto = bool(
+        liste is not None
+        and liste > 0
+        and iskonto is not None
+        and iskonto > 0
+    )
+    return pozitif_liste_iskonto and (tek_kaynak or stoklu)
+
+
+def alis_kaynagi_stokta_var_mi(fiyat: dict | None) -> bool:
+    """Geriye uyumlu ad; kullanılabilir alış kaynağı kuralını uygular."""
+    return alis_kaynagi_kullanilabilir_mi(fiyat)
+
+
+def kategori_kar_oranlarini_oku(kategoriler: list[str]) -> dict:
+    """Kategori bazlı karar kâr oranlarını ayar Excel'inden okur.
+
+    Dosya yoksa kullanıcının doldurması için örnek şablon oluşturulur.
+    Beklenen kolonlar: Kategori, Kar Orani
+    """
+    KATEGORI_KAR_ORANI_DOSYASI.parent.mkdir(exist_ok=True)
+    benzersiz_kategoriler = sorted(
+        {
+            str(kategori).strip()
+            for kategori in kategoriler
+            if str(kategori).strip()
+        }
+    )
+    if not KATEGORI_KAR_ORANI_DOSYASI.exists():
+        pd.DataFrame(
+            {
+                "Kategori": benzersiz_kategoriler,
+                "Kar Orani": ["" for _ in benzersiz_kategoriler],
+            }
+        ).to_excel(KATEGORI_KAR_ORANI_DOSYASI, index=False)
+        print(
+            "Kategori kâr oranı şablonu oluşturuldu; oranları doldurup raporu tekrar çalıştırın: "
+            f"{KATEGORI_KAR_ORANI_DOSYASI}"
+        )
+        return {}
+
+    kaynak_dosya = (
+        KATEGORI_KAR_YEDEK_DOSYASI
+        if KATEGORI_KAR_YEDEK_DOSYASI.exists()
+        else KATEGORI_KAR_ORANI_DOSYASI
+    )
+    df = pd.read_excel(kaynak_dosya, dtype=str).fillna("")
+    kategori_col = kolon_bul(df.columns, ["Kategori", "Ana Kategori Adı", "Ana Kategori Adi"])
+    kar_col = kolon_bul(df.columns, ["Kar Orani", "Kâr Oranı", "Kar Oranı", "Kar %", "Kâr %"])
+    if not kategori_col or not kar_col:
+        raise ValueError(
+            "kategori_kar_oranlari.xlsx içinde 'Kategori' ve 'Kar Orani' kolonları olmalı"
+        )
+
+    oranlar = {}
+    for _, row in df.iterrows():
+        kategori = str(row.get(kategori_col, "")).strip()
+        oran = ondalik(row.get(kar_col, ""))
+        if kategori and oran is not None:
+            oranlar[metin_norm(kategori)] = float(oran)
+    return oranlar
+
+
+def uygulanan_kar_oranini_hesapla(kategori_hedefi, en_uygun_fiyat):
+    """Fiyat Onay sayfasına yazılacak gerçek kâr tabanını hesaplar."""
+    hedef = ondalik(kategori_hedefi)
+    if hedef is None:
+        return ""
+    rakip = ondalik(en_uygun_fiyat)
+    if rakip is not None and rakip > 0:
+        if hedef in {Decimal("30"), Decimal("50")}:
+            return float(hedef)
+        return float(GENEL_MIN_KAR_ORANI)
+    return float(hedef)
+
+
+def paket_birim_ayarlari_sayfasi_ekle(wb, ayarlar: dict) -> None:
+    """Kullanılan paket/birim kurallarını fiyat onay dosyasına görünür ayar sayfası olarak ekler."""
+    ws = wb.create_sheet("Paket Birim Ayarları")
+    ws.sheet_view.showGridLines = False
+    basliklar = [
+        "Aktif", "ProductId", "Marka", "Kategori", "Ürün Web Servis Kodu",
+        "Firma", "Kaynak Türü", "Paket Adedi", "Fiyatın Kapsadığı Adet",
+        "Kontrol Durumu",
+    ]
+    ws.merge_cells("A1:J1")
+    ws["A1"] = "PAKET / BİRİM FİYAT AYARLARI"
+    ws["A1"].fill = PatternFill("solid", fgColor="173F68")
+    ws["A1"].font = Font(color="FFFFFF", bold=True, size=14)
+    ws["A1"].alignment = Alignment(vertical="center")
+    ws.row_dimensions[1].height = 28
+    ws.merge_cells("A2:J2")
+    ws["A2"] = (
+        "Yalnız fiyatın kapsadığı adet dönüşümüdür; zam, satış fiyatı veya "
+        "iskonto sonucu içermez."
+    )
+    ws["A2"].fill = PatternFill("solid", fgColor="EAF2F8")
+    ws["A2"].font = Font(color="244A6D", italic=True)
+    ws.append(basliklar)
+    for cell in ws[3]:
+        cell.fill = PatternFill("solid", fgColor="245986")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    for kayit in ayarlar.get("paket_birim", {}).get("satirlar", []):
+        ws.append([
+            kayit.get("Aktif", ""), kayit.get("ProductId", ""),
+            kayit.get("Marka", ""), kayit.get("Kategori", ""),
+            kayit.get("Ürün Web Servis Kodu", ""), kayit.get("Firma", ""),
+            kayit.get("Kaynak Türü", ""), float(kayit.get("Paket Adedi", 1)),
+            float(kayit.get("Fiyatın Kapsadığı Adet", 1)),
+            kayit.get("Kontrol Durumu", ""),
+        ])
+    genislikler = [9, 11, 18, 28, 22, 23, 13, 12, 20, 16]
+    for index, genislik in enumerate(genislikler, 1):
+        ws.column_dimensions[get_column_letter(index)].width = genislik
+    for satir in range(4, ws.max_row + 1):
+        for kolon in (1, 8, 9, 10):
+            ws.cell(satir, kolon).fill = PatternFill("solid", fgColor="FFF2CC")
+        ws.cell(satir, 8).number_format = "0"
+        ws.cell(satir, 9).number_format = "0"
+    ws.freeze_panes = "F4"
+    ws.auto_filter.ref = f"A3:J{max(ws.max_row, 3)}"
+
+
+def fiyat_onay_sayfasi_ekle(
+    wb,
+    index: dict,
+    urunler: list[dict],
+    tedarikciler: list[str],
+    rakip_firmalar: list[str],
+    rakip_haritasi: dict,
+    son_satir: int,
+) -> None:
+    kategori_oranlari = kategori_kar_oranlarini_oku(
+        [urun.get("Kategori", "") for urun in urunler]
+    )
+
+    kategori_ws = wb.create_sheet("Kategori Kar Oranları")
+    kategori_ws.append(["Kategori", "Kar Orani"])
+    kategoriler = sorted(
+        {
+            str(urun.get("Kategori", "")).strip()
+            for urun in urunler
+            if str(urun.get("Kategori", "")).strip()
+        }
+    )
+    for kategori in kategoriler:
+        kategori_ws.append(
+            [kategori, kategori_oranlari.get(metin_norm(kategori), "")]
+        )
+    for cell in kategori_ws[1]:
+        cell.fill = PatternFill("solid", fgColor="305496")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    kategori_ws.freeze_panes = "A2"
+    kategori_ws.column_dimensions["A"].width = 38
+    kategori_ws.column_dimensions["B"].width = 14
+    for row in range(2, len(kategoriler) + 2):
+        kategori_ws.cell(row, 2).number_format = "0.00"
+
+    onay_ws = wb.create_sheet("Fiyat Onay", 1)
+    onay_ws.sheet_view.showGridLines = False
+    urun_bilgileri = [
+        "ProductId",
+        "Marka",
+        "Kategori",
+        "Ürün Web Servis Kodu",
+        "Stok",
+        "T-SOFT AKTİFLİK",
+    ]
+    hesap_bilgileri = [
+        "EN İYİ ALIŞ B2B",
+        "ORTALAMA ALIŞ",
+        "ORTALAMA STOK",
+        "ORTALAMA İSKONTO",
+        "EN UYGUN RAKİP FİRMA",
+        "RAKİP STOK DURUMU",
+        "EN UYGUN SATIŞ FİYATI",
+        "EN UYGUN İSKONTO",
+    ]
+    karar = [
+        "KATEGORİ KÂR ORANI",
+        "SATIŞ FİYATI",
+        "REEL KÂR ORANI",
+        "HESAPLANAN İSKONTO",
+        "SEÇİLEN İSKONTO",
+        "ONAY",
+        "AKTARIM DURUMU",
+    ]
+    basliklar = urun_bilgileri + hesap_bilgileri + karar
+    onay_index = {ad: i + 1 for i, ad in enumerate(basliklar)}
+
+    gruplar = [
+        ("ÜRÜN BİLGİLERİ", len(urun_bilgileri), "1F4E78"),
+        ("ALIŞ / PİYASA ÖZETİ", len(hesap_bilgileri), "548235"),
+        ("FİYATLANDIRMA ONAYI", len(karar), "305496"),
+    ]
+    baslangic = 1
+    for grup_adi, uzunluk, renk in gruplar:
+        bitis = baslangic + uzunluk - 1
+        onay_ws.merge_cells(
+            start_row=1,
+            start_column=baslangic,
+            end_row=1,
+            end_column=bitis,
+        )
+        cell = onay_ws.cell(1, baslangic, grup_adi)
+        cell.fill = PatternFill("solid", fgColor=renk)
+        cell.font = Font(color="FFFFFF", bold=True, size=12)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        baslangic = bitis + 1
+
+    for col, baslik in enumerate(basliklar, 1):
+        cell = onay_ws.cell(2, col, baslik)
+        cell.fill = PatternFill("solid", fgColor="17365D")
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    ana_sayfa = "'Fiyatlandırma'"
+
+    for kaynak_satir in range(3, son_satir + 1):
+        hedef_satir = kaynak_satir
+        urun = urunler[kaynak_satir - 3]
+        for baslik in [
+            "ProductId",
+            "Marka",
+            "Kategori",
+            "Ürün Web Servis Kodu",
+            "T-SOFT AKTİFLİK",
+        ]:
+            kaynak = f"{get_column_letter(index[baslik])}{kaynak_satir}"
+            onay_ws.cell(
+                hedef_satir,
+                onay_index[baslik],
+                f"={ana_sayfa}!{kaynak}",
+            )
+        onay_ws.cell(hedef_satir, onay_index["Stok"], urun.get("Stok", ""))
+
+        netler = []
+        stoklar = []
+        iskonto_degerleri = []
+        en_iyi_b2b = ""
+        en_iyi_net = None
+        urun_kaynak_sayisi = sum(
+            1 for tedarikci in tedarikciler if urun.get(tedarikci)
+        )
+        tek_alis_kaynagi = urun_kaynak_sayisi == 1
+        for tedarikci in tedarikciler:
+            fiyat = urun.get(tedarikci)
+            if not fiyat:
+                continue
+            if not alis_kaynagi_kullanilabilir_mi(
+                fiyat,
+                tek_kaynak=tek_alis_kaynagi,
+            ):
+                continue
+            stok = fiyat.get("stok")
+            if stok is not None:
+                stoklar.append(float(stok))
+            net = fiyat.get("net_tl_kdv_haric")
+            if net is not None:
+                net_float = float(net)
+                netler.append(net_float)
+                if en_iyi_net is None or net_float < en_iyi_net:
+                    en_iyi_net = net_float
+                    en_iyi_b2b = tedarikci
+            iskonto = fiyat.get("iskonto_yuzde")
+            if iskonto is not None:
+                iskonto_degerleri.append(float(iskonto))
+
+        onay_ws.cell(hedef_satir, onay_index["EN İYİ ALIŞ B2B"], en_iyi_b2b)
+        ort_alis_ref = (
+            f"{get_column_letter(index['MİN. ORT. NET ALIŞ'])}{kaynak_satir}"
+        )
+        ort_isk_ref = (
+            f"{get_column_letter(index['MİN. ORT. İSKONTO'])}{kaynak_satir}"
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["ORTALAMA ALIŞ"],
+            f"={ana_sayfa}!{ort_alis_ref}",
+        )
+        if stoklar:
+            onay_ws.cell(
+                hedef_satir,
+                onay_index["ORTALAMA STOK"],
+                sum(stoklar) / len(stoklar),
+            )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["ORTALAMA İSKONTO"],
+            f"={ana_sayfa}!{ort_isk_ref}",
+        )
+
+        kod_norm = metin_norm(urun.get("Web Servis Kodu", ""))
+        en_uygun_rakip_firma = ""
+        en_uygun_rakip_stok = ""
+        en_uygun_iskonto = ""
+        en_uygun_fiyat = None
+        herhangi_rakip_var = False
+        for firma in rakip_firmalar:
+            kayit = rakip_haritasi.get((metin_norm(firma), kod_norm))
+            if kayit:
+                herhangi_rakip_var = True
+                stok_durum = "VAR" if rakip_stokta_var_mi(kayit.get("stok")) else "YOK"
+                if (
+                    stok_durum == "VAR"
+                    and kayit.get("net_satis_kdv_haric") is not None
+                    and kayit["net_satis_kdv_haric"] > 0
+                    and (
+                        en_uygun_fiyat is None
+                        or float(kayit["net_satis_kdv_haric"]) < en_uygun_fiyat
+                    )
+                ):
+                    en_uygun_fiyat = float(kayit["net_satis_kdv_haric"])
+                    en_uygun_rakip_firma = firma
+                    en_uygun_rakip_stok = "VAR"
+                    # Yuzde 0 gercek bir degerdir; bos metne cevrilirse rakip
+                    # iskontosu yok kuralinin denetlenmesi mumkun olmaz.
+                    rakip_iskonto = kayit.get("iskonto")
+                    en_uygun_iskonto = (
+                        rakip_iskonto if rakip_iskonto is not None else ""
+                    )
+        if herhangi_rakip_var and not en_uygun_rakip_stok:
+            en_uygun_rakip_stok = "YOK"
+
+        en_uygun_ref = (
+            f"{get_column_letter(index['EN DÜŞÜK RAKİP FİYATI'])}{kaynak_satir}"
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["EN UYGUN RAKİP FİRMA"],
+            en_uygun_rakip_firma,
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["RAKİP STOK DURUMU"],
+            en_uygun_rakip_stok,
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["EN UYGUN SATIŞ FİYATI"],
+            f"={ana_sayfa}!{en_uygun_ref}",
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["EN UYGUN İSKONTO"],
+            en_uygun_iskonto,
+        )
+
+        ort_alis = f"{get_column_letter(onay_index['ORTALAMA ALIŞ'])}{hedef_satir}"
+        en_uygun = f"{get_column_letter(onay_index['EN UYGUN SATIŞ FİYATI'])}{hedef_satir}"
+        en_uygun_isk = f"{get_column_letter(onay_index['EN UYGUN İSKONTO'])}{hedef_satir}"
+        kategori_kar = f"{get_column_letter(onay_index['KATEGORİ KÂR ORANI'])}{hedef_satir}"
+        satis = f"{get_column_letter(onay_index['SATIŞ FİYATI'])}{hedef_satir}"
+        reel_kar = f"{get_column_letter(onay_index['REEL KÂR ORANI'])}{hedef_satir}"
+        hesaplanan_isk = f"{get_column_letter(onay_index['HESAPLANAN İSKONTO'])}{hedef_satir}"
+        secilen_isk = f"{get_column_letter(onay_index['SEÇİLEN İSKONTO'])}{hedef_satir}"
+        onay = f"{get_column_letter(onay_index['ONAY'])}{hedef_satir}"
+        aktiflik = f"{get_column_letter(onay_index['T-SOFT AKTİFLİK'])}{hedef_satir}"
+        tsoft_liste_ref = (
+            f"{get_column_letter(index['T-SOFT LİSTE FİYATI TL'])}{kaynak_satir}"
+        )
+        kategori_hedefi = kategori_oranlari.get(
+            metin_norm(urun.get("Kategori", "")),
+            "",
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["KATEGORİ KÂR ORANI"],
+            uygulanan_kar_oranini_hesapla(kategori_hedefi, en_uygun_fiyat),
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["SATIŞ FİYATI"],
+            (
+                f'=IF(OR({ort_alis}="",{kategori_kar}=""),"",'
+                f'IF(AND({en_uygun}<>"",{en_uygun}>={ort_alis}*(1+{kategori_kar}/100)),'
+                f'{en_uygun},{ort_alis}*(1+{kategori_kar}/100)))'
+            ),
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["REEL KÂR ORANI"],
+            f'=IFERROR(({satis}/{ort_alis}-1)*100,"")',
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["HESAPLANAN İSKONTO"],
+            f'=IFERROR((1-{satis}/{ana_sayfa}!{tsoft_liste_ref})*100,"")',
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["SEÇİLEN İSKONTO"],
+            f'=IF({hesaplanan_isk}="","",{hesaplanan_isk})',
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["ONAY"],
+            (
+                f'=IF({aktiflik}<>"AKTİF","HAYIR",'
+                f'IF(OR({ort_alis}="",{kategori_kar}="",{satis}="",'
+                f'{reel_kar}="",{secilen_isk}="",'
+                f'AND({en_uygun}<>"",OR({en_uygun_isk}="",{en_uygun_isk}<=0)),'
+                f'{secilen_isk}<0,{secilen_isk}>=100,'
+                f'{reel_kar}<{kategori_kar}),"HAYIR","EVET"))'
+            ),
+        )
+        onay_ws.cell(
+            hedef_satir,
+            onay_index["AKTARIM DURUMU"],
+            (
+                f'=IF({aktiflik}="PASİF","PASİF ÜRÜN",'
+                f'IF({aktiflik}<>"AKTİF","AKTİFLİK BİLGİSİ YOK",'
+                f'IF({ort_alis}="","ALIŞ FİYATI YOK",'
+                f'IF({kategori_kar}="","KATEGORİ KÂR ORANI YOK",'
+                f'IF(AND({en_uygun}<>"",OR({en_uygun_isk}="",{en_uygun_isk}<=0)),"RAKİP İSKONTOSU YOK",'
+                f'IF({secilen_isk}="","İSKONTO BEKLİYOR",'
+                f'IF(OR({secilen_isk}<0,{secilen_isk}>=100),"İSKONTO HATALI",'
+                f'IF({reel_kar}<{kategori_kar},"KÂR ORANI DÜŞÜK",'
+                f'IF({onay}="EVET","AKTARIMA HAZIR","AKTARIMA UYGUN DEĞİL")))))))))'
+            ),
+        )
+
+    hedef_son_satir = max(son_satir, 3)
+    thin = Side(style="thin", color="D9E2F3")
+    input_fill = PatternFill("solid", fgColor="FFD966")
+    karar_fill = PatternFill("solid", fgColor="DDEBF7")
+    for row in onay_ws.iter_rows(
+        min_row=3,
+        max_row=hedef_son_satir,
+        min_col=1,
+        max_col=len(basliklar),
+    ):
+        for cell in row:
+            cell.border = Border(bottom=thin)
+            cell.alignment = Alignment(vertical="center")
+            if cell.column >= onay_index["KATEGORİ KÂR ORANI"]:
+                cell.fill = karar_fill
+    for ad in ["SEÇİLEN İSKONTO"]:
+        for row in range(3, hedef_son_satir + 1):
+            onay_ws.cell(row, onay_index[ad]).fill = input_fill
+
+    iskonto_dv = DataValidation(
+        type="decimal",
+        operator="between",
+        formula1="0",
+        formula2="99.99",
+        allow_blank=True,
+    )
+    onay_ws.add_data_validation(iskonto_dv)
+    iskonto_col = get_column_letter(onay_index["SEÇİLEN İSKONTO"])
+    iskonto_dv.add(f"{iskonto_col}3:{iskonto_col}{hedef_son_satir}")
+    durum_col = get_column_letter(onay_index["AKTARIM DURUMU"])
+    onay_ws.conditional_formatting.add(
+        f"{durum_col}3:{durum_col}{hedef_son_satir}",
+        FormulaRule(
+            formula=[f'${durum_col}3="AKTARIMA HAZIR"'],
+            fill=PatternFill("solid", fgColor="C6EFCE"),
+        ),
+    )
+    onay_ws.conditional_formatting.add(
+        f"{durum_col}3:{durum_col}{hedef_son_satir}",
+        FormulaRule(
+            formula=[
+                f'OR(${durum_col}3="KÂR ORANI DÜŞÜK",'
+                f'${durum_col}3="ALIŞ FİYATI YOK",'
+                f'${durum_col}3="KATEGORİ KÂR ORANI YOK")'
+            ],
+            fill=PatternFill("solid", fgColor="FFC7CE"),
+        ),
+    )
+
+    sayisal_basliklar = {
+        "Stok",
+        "ORTALAMA ALIŞ",
+        "ORTALAMA STOK",
+        "EN UYGUN SATIŞ FİYATI",
+        "SATIŞ FİYATI",
+    }
+    yuzde_basliklar = {
+        "ORTALAMA İSKONTO",
+        "EN UYGUN İSKONTO",
+        "KATEGORİ KÂR ORANI",
+        "REEL KÂR ORANI",
+        "HESAPLANAN İSKONTO",
+        "SEÇİLEN İSKONTO",
+    }
+    for row in range(3, hedef_son_satir + 1):
+        for baslik in sayisal_basliklar:
+            onay_ws.cell(row, onay_index[baslik]).number_format = "#,##0.00"
+        for baslik in yuzde_basliklar:
+            onay_ws.cell(row, onay_index[baslik]).number_format = "0.00"
+
+    genislik = {
+        "ProductId": 12,
+        "Marka": 18,
+        "Kategori": 25,
+        "Ürün Web Servis Kodu": 25,
+        "Stok": 12,
+        "T-SOFT AKTİFLİK": 18,
+        "EN İYİ ALIŞ B2B": 18,
+        "ORTALAMA ALIŞ": 16,
+        "ORTALAMA STOK": 16,
+        "ORTALAMA İSKONTO": 18,
+        "EN UYGUN RAKİP FİRMA": 24,
+        "RAKİP STOK DURUMU": 18,
+        "EN UYGUN SATIŞ FİYATI": 20,
+        "EN UYGUN İSKONTO": 18,
+        "KATEGORİ KÂR ORANI": 20,
+        "SATIŞ FİYATI": 18,
+        "REEL KÂR ORANI": 18,
+        "HESAPLANAN İSKONTO": 20,
+        "SEÇİLEN İSKONTO": 18,
+        "ONAY": 12,
+        "AKTARIM DURUMU": 24,
+    }
+    for col, baslik in enumerate(basliklar, 1):
+        onay_ws.column_dimensions[get_column_letter(col)].width = genislik.get(
+            baslik, 14
+        )
+    onay_ws.freeze_panes = "F3"
+    onay_ws.auto_filter.ref = (
+        f"A2:{get_column_letter(len(basliklar))}{hedef_son_satir}"
+    )
+    onay_ws.row_dimensions[1].height = 26
+    onay_ws.row_dimensions[2].height = 55
+
+
 def rapor_olustur(
     urunler,
     tedarikciler,
@@ -3176,6 +4092,7 @@ def rapor_olustur(
     wb = Workbook()
     ws = wb.active
     ws.title = "Fiyatlandırma"
+    paket_birim_ayarlari_sayfasi_ekle(wb, ayarlar)
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "F3"
     rakip_analiz_ws = wb.create_sheet("_RakipAnaliz")
@@ -3183,7 +4100,15 @@ def rapor_olustur(
     for sutun, firma in enumerate(rakip_firmalar, 1):
         rakip_analiz_ws.cell(2, sutun, firma)
 
-    sabit = ["ProductId", "Marka", "Kategori", "Ürün Web Servis Kodu", "Ürün Adı", "Fiyat Birimi"]
+    sabit = [
+        "ProductId",
+        "Marka",
+        "Kategori",
+        "Ürün Web Servis Kodu",
+        "Ürün Adı",
+        "T-SOFT AKTİFLİK",
+        "Fiyat Birimi",
+    ]
     b2b = []
     for t in tedarikciler:
         b2b.extend(
@@ -3191,6 +4116,7 @@ def rapor_olustur(
                 f"{t} LİSTE",
                 f"{t} İSKONTO",
                 f"{t} NET ALIŞ KDV HARİÇ",
+                f"{t} STOK",
                 f"{t} MİN. PAKET",
             ]
         )
@@ -3276,6 +4202,7 @@ def rapor_olustur(
         ws.cell(satir_no, index["Kategori"], urun["Kategori"])
         ws.cell(satir_no, index["Ürün Web Servis Kodu"], urun["Web Servis Kodu"])
         ws.cell(satir_no, index["Ürün Adı"], urun["Ürün Adı"])
+        ws.cell(satir_no, index["T-SOFT AKTİFLİK"], urun["T-SOFT AKTİFLİK"])
         ws.cell(satir_no, index["Fiyat Birimi"], urun["Fiyat Birimi"])
         tsoft_liste = urun.get("T-SOFT LİSTE FİYATI")
         para_birimi = para_birimi_kodu(urun["Fiyat Birimi"])
@@ -3311,10 +4238,27 @@ def rapor_olustur(
             isk_col = index[f"{t} İSKONTO"]
             net_haric_col = index[f"{t} NET ALIŞ KDV HARİÇ"]
             ws.cell(satir_no, liste_col, float(f["liste_tl"]))
-            ws.cell(satir_no, isk_col, float(f["iskonto_yuzde"]))
             liste_ref = f"{get_column_letter(liste_col)}{satir_no}"
             isk_ref = f"{get_column_letter(isk_col)}{satir_no}"
-            ws.cell(satir_no, net_haric_col, f'=IFERROR({liste_ref}*(1-{isk_ref}/100),"")')
+            if f.get("aksiyon_fiyati_kullanildi"):
+                # Aksiyon fiyatı doğrudan net alıştır; iskonto hücresi boş kalır
+                # ve liste fiyatı üzerinden ikinci kez hesap yapılmaz.
+                ws.cell(satir_no, isk_col, "")
+                ws.cell(
+                    satir_no,
+                    net_haric_col,
+                    float(f["net_tl_kdv_haric"]),
+                )
+            else:
+                ws.cell(satir_no, isk_col, float(f["iskonto_yuzde"]))
+                ws.cell(
+                    satir_no,
+                    net_haric_col,
+                    f'=IFERROR({liste_ref}*(1-{isk_ref}/100),"")',
+                )
+            stok = f.get("stok")
+            if stok is not None:
+                ws.cell(satir_no, index[f"{t} STOK"], float(stok))
             ws.cell(satir_no, index[f"{t} MİN. PAKET"], float(f["min_paket"]))
 
         ort_isk_degerleri = []
@@ -3323,32 +4267,41 @@ def rapor_olustur(
         ort_isk_sayimlari = []
         ort_net_sayimlari = []
         ort_liste_sayimlari = []
+        urun_kaynak_sayisi = sum(1 for t in tedarikciler if urun.get(t))
+        tek_alis_kaynagi = urun_kaynak_sayisi == 1
         for t in tedarikciler:
             liste_ref = f"{get_column_letter(index[f'{t} LİSTE'])}{satir_no}"
             isk_ref = f"{get_column_letter(index[f'{t} İSKONTO'])}{satir_no}"
             net_ref = (
                 f"{get_column_letter(index[f'{t} NET ALIŞ KDV HARİÇ'])}{satir_no}"
             )
-            if t == "KONYA":
-                ort_isk_degerleri.append(f"IF({isk_ref}<>0,{isk_ref},0)")
-                ort_net_degerleri.append(f"IF({isk_ref}<>0,{net_ref},0)")
-                ort_liste_degerleri.append(f"IF({isk_ref}<>0,{liste_ref},0)")
-                ort_isk_sayimlari.append(
-                    f"IF(AND({isk_ref}<>0,ISNUMBER({isk_ref})),1,0)"
-                )
-                ort_net_sayimlari.append(
-                    f"IF(AND({isk_ref}<>0,ISNUMBER({net_ref})),1,0)"
-                )
-                ort_liste_sayimlari.append(
-                    f"IF(AND({isk_ref}<>0,ISNUMBER({liste_ref})),1,0)"
-                )
-            else:
-                ort_isk_degerleri.append(isk_ref)
-                ort_net_degerleri.append(net_ref)
-                ort_liste_degerleri.append(liste_ref)
-                ort_isk_sayimlari.append(f"IF(ISNUMBER({isk_ref}),1,0)")
-                ort_net_sayimlari.append(f"IF(ISNUMBER({net_ref}),1,0)")
-                ort_liste_sayimlari.append(f"IF(ISNUMBER({liste_ref}),1,0)")
+            stok_ref = f"{get_column_letter(index[f'{t} STOK'])}{satir_no}"
+            # Tek kaynaklı üründe pozitif liste + pozitif iskonto stok olmasa da
+            # kullanılabilir. Çok kaynaklı üründe stok şartı devam eder. İskontosu
+            # boş ve net hücresi sabit sayı olan açık aksiyon fiyatı yalnız stok
+            # varsa doğrudan net alış istisnasıdır.
+            normal_kaynak_gecerli = (
+                f"AND({liste_ref}>0,{isk_ref}>0)"
+                if tek_alis_kaynagi
+                else f"AND({stok_ref}>0,{liste_ref}>0,{isk_ref}>0)"
+            )
+            kaynak_gecerli = (
+                f"AND(ISNUMBER({net_ref}),{net_ref}>0,OR("
+                f"{normal_kaynak_gecerli},"
+                f"AND({stok_ref}>0,{isk_ref}=\"\",NOT(ISFORMULA({net_ref})))))"
+            )
+            ort_isk_degerleri.append(f"IF({kaynak_gecerli},{isk_ref},0)")
+            ort_net_degerleri.append(f"IF({kaynak_gecerli},{net_ref},0)")
+            ort_liste_degerleri.append(f"IF({kaynak_gecerli},{liste_ref},0)")
+            ort_isk_sayimlari.append(
+                f"IF(AND({kaynak_gecerli},ISNUMBER({isk_ref})),1,0)"
+            )
+            ort_net_sayimlari.append(
+                f"IF(AND({kaynak_gecerli},ISNUMBER({net_ref})),1,0)"
+            )
+            ort_liste_sayimlari.append(
+                f"IF(AND({kaynak_gecerli},ISNUMBER({liste_ref})),1,0)"
+            )
         ort_isk_ifade = (
             f'IFERROR(SUM({",".join(ort_isk_degerleri)})/'
             f'SUM({",".join(ort_isk_sayimlari)}),"")'
@@ -3520,24 +4473,27 @@ def rapor_olustur(
                 f'=IF({secilen_iskonto}="","İSKONTO BEKLİYOR",'
                 f'IF(OR({tsoft_liste_tl_ref}="",{tsoft_liste_tl_ref}<=0,'
                 f'{min_ort}="",{min_ort}<=0),"KONTROL EDİLEMEDİ",'
-                f'IF({gercek_kar}<5,"KÂR %5 ALTI: %"&TEXT({gercek_kar},"0.00"),'
+                f'IF({gercek_kar}<{GENEL_MIN_KAR_ORANI},"KÂR %7 ALTI: %"&TEXT({gercek_kar},"0.00"),'
                 f'"KÂR UYGUN: %"&TEXT({gercek_kar},"0.00"))))'
             ),
         )
         onay = f"{get_column_letter(index['ONAY'])}{satir_no}"
+        aktiflik = f"{get_column_letter(index['T-SOFT AKTİFLİK'])}{satir_no}"
         ws.cell(
             satir_no,
             index["AKTARIM DURUMU"],
             (
-                f'=IF({min_ort}="","ALIŞ FİYATI YOK",'
+                f'=IF({aktiflik}="PASİF","PASİF ÜRÜN",'
+                f'IF({aktiflik}<>"AKTİF","AKTİFLİK BİLGİSİ YOK",'
+                f'IF({min_ort}="","ALIŞ FİYATI YOK",'
                 f'IF(OR({min_kar_ref}="",{hedef_kar_ref}=""),"KÂR ORANI BEKLİYOR",'
                 f'IF({min_satis}>{hedef_satis},"KÂR ARALIĞI HATALI",'
                 f'IF({secilen_iskonto}="","İSKONTO SEÇİMİ BEKLİYOR",'
                 f'IF({kar_kontrol_ref}="KONTROL EDİLEMEDİ","KÂR KONTROL EDİLEMEDİ",'
-                f'IF(LEFT({kar_kontrol_ref},11)="KÂR %5 ALTI","KÂR %5 ALTI",'
+                f'IF(LEFT({kar_kontrol_ref},11)="KÂR %7 ALTI","KÂR %7 ALTI",'
                 f'IF(OR({secilen}<{min_satis},{secilen}>{hedef_satis}),"FİYAT ARALIK DIŞI",'
                 f'IF({onay}="EVET","AKTARIMA HAZIR",'
-                f'IF({onay}="HAYIR","REDDEDİLDİ","ONAY BEKLİYOR")))))))))'
+                f'IF({onay}="HAYIR","REDDEDİLDİ","ONAY BEKLİYOR")))))))))))'
             ),
         )
 
@@ -3659,7 +4615,7 @@ def rapor_olustur(
             formula=[
                 f'OR(${durum_col}3="FİYAT ARALIK DIŞI",'
                 f'${durum_col}3="KÂR ARALIĞI HATALI",'
-                f'${durum_col}3="KÂR %5 ALTI",'
+                f'${durum_col}3="KÂR %7 ALTI",'
                 f'${durum_col}3="KÂR KONTROL EDİLEMEDİ")'
             ],
             fill=PatternFill("solid", fgColor="FFC7CE"),
@@ -3676,7 +4632,7 @@ def rapor_olustur(
     ws.conditional_formatting.add(
         f"{kar_kontrol_col}3:{kar_kontrol_col}{son_satir}",
         FormulaRule(
-            formula=[f'LEFT(${kar_kontrol_col}3,11)="KÂR %5 ALTI"'],
+            formula=[f'LEFT(${kar_kontrol_col}3,11)="KÂR %7 ALTI"'],
             fill=PatternFill("solid", fgColor="FFC7CE"),
         ),
     )
@@ -3695,6 +4651,7 @@ def rapor_olustur(
         "Kategori": 25,
         "Ürün Web Servis Kodu": 25,
         "Ürün Adı": 52,
+        "T-SOFT AKTİFLİK": 18,
         "Fiyat Birimi": 13,
         "KÂR KONTROLÜ": 24,
         "FİYAT KONUMUMUZ": 24,
@@ -3707,6 +4664,16 @@ def rapor_olustur(
     ws.auto_filter.ref = f"A2:{get_column_letter(len(basliklar))}{son_satir}"
     ws.row_dimensions[1].height = 26
     ws.row_dimensions[2].height = 55
+
+    fiyat_onay_sayfasi_ekle(
+        wb=wb,
+        index=index,
+        urunler=urunler,
+        tedarikciler=tedarikciler,
+        rakip_firmalar=rakip_firmalar,
+        rakip_haritasi=rakip_haritasi,
+        son_satir=son_satir,
+    )
 
     kur_ws = wb.create_sheet("Kurlar")
     kur_ws.append(["Para Birimi", "TL Kuru", "Kaynak", "Kur Tarihi", "Çekim Zamanı"])
@@ -3748,178 +4715,6 @@ def rapor_olustur(
     kur_ws.column_dimensions["D"].width = 16
     kur_ws.column_dimensions["E"].width = 22
 
-    marka_ws = wb.create_sheet("Marka Rekabet")
-    marka_basliklar = [
-        "Marka",
-        "Toplam Ürün",
-        "Rakip Fiyatı Bulunan",
-        "Rakip Kapsama %",
-        "Ortalama Ürün Bazlı Fark %",
-        "Rekabetçi Ürün %",
-        "En Ucuz Olduğumuz",
-        "Ortalamanın Altında",
-        "Ortalamanın Üstünde",
-        "En Pahalı Olduğumuz",
-        "Rakip Fiyatı Yok",
-    ]
-    marka_ws.append(marka_basliklar)
-    markalar = sorted(
-        {
-            str(urun.get("Marka", "")).strip()
-            for urun in urunler
-            if str(urun.get("Marka", "")).strip()
-        }
-    )
-    fiyat_marka_col = get_column_letter(index["Marka"])
-    piyasa_col = get_column_letter(index["ORTALAMA RAKİP FİYATI"])
-    rakip_fark_col = get_column_letter(index["RAKİP FARK %"])
-    konum_col = get_column_letter(index["FİYAT KONUMUMUZ"])
-    for marka_satir, marka in enumerate(markalar, 2):
-        marka_ws.cell(marka_satir, 1, marka)
-        marka_ref = f"$A{marka_satir}"
-        marka_ws.cell(
-            marka_satir,
-            2,
-            f'=COUNTIF(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref})',
-        )
-        marka_ws.cell(
-            marka_satir,
-            3,
-            f'=COUNTIFS(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${piyasa_col}$3:${piyasa_col}${son_satir},">0")',
-        )
-        marka_ws.cell(
-            marka_satir,
-            4,
-            f'=IFERROR(C{marka_satir}/B{marka_satir}*100,"")',
-        )
-        marka_ws.cell(
-            marka_satir,
-            5,
-            f'=IFERROR(AVERAGEIFS(Fiyatlandırma!${rakip_fark_col}$3:${rakip_fark_col}${son_satir},Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${rakip_fark_col}$3:${rakip_fark_col}${son_satir},"<>"),"")',
-        )
-        marka_ws.cell(
-            marka_satir,
-            6,
-            f'=IFERROR((G{marka_satir}+H{marka_satir})/C{marka_satir}*100,"")',
-        )
-        for sutun, konum in [
-            (7, "EN UCUZ"),
-            (8, "ORTALAMANIN ALTINDA"),
-            (9, "ORTALAMANIN ÜSTÜNDE"),
-            (10, "EN PAHALI"),
-        ]:
-            marka_ws.cell(
-                marka_satir,
-                sutun,
-                f'=COUNTIFS(Fiyatlandırma!${fiyat_marka_col}$3:${fiyat_marka_col}${son_satir},{marka_ref},Fiyatlandırma!${konum_col}$3:${konum_col}${son_satir},"{konum}")',
-            )
-        marka_ws.cell(
-            marka_satir,
-            11,
-            f'=B{marka_satir}-C{marka_satir}',
-        )
-    for cell in marka_ws[1]:
-        cell.fill = PatternFill("solid", fgColor="9C6500")
-        cell.font = Font(color="FFFFFF", bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    marka_ws.freeze_panes = "A2"
-    marka_ws.auto_filter.ref = f"A1:K{max(len(markalar) + 1, 2)}"
-    for col in range(1, 12):
-        marka_ws.column_dimensions[get_column_letter(col)].width = 24
-    for row in range(2, len(markalar) + 2):
-        for col in (4, 5, 6):
-            marka_ws.cell(row, col).number_format = '0.00'
-
-    urun_rekabet_ws = wb.create_sheet("Ürün Rekabet")
-    urun_rekabet_basliklar = [
-        "ProductId",
-        "Marka",
-        "Kategori",
-        "Ürün Web Servis Kodu",
-        "Ürün Adı",
-        "Bizim Fiyatımız KDV Hariç",
-    ]
-    for firma in rakip_firmalar:
-        urun_rekabet_basliklar.extend(
-            [
-                f"{firma} STOK",
-                f"{firma} NET SATIŞ KDV HARİÇ",
-            ]
-        )
-    urun_rekabet_basliklar.extend(
-        [
-            "En Düşük Rakip Fiyatı",
-            "Ortalama Rakip Fiyatı",
-            "En Yüksek Rakip Fiyatı",
-            "Rakip Fark %",
-            "Fiyat Konumumuz",
-        ]
-    )
-    urun_rekabet_ws.append(urun_rekabet_basliklar)
-    urun_rekabet_kaynaklari = [
-        "ProductId",
-        "Marka",
-        "Kategori",
-        "Ürün Web Servis Kodu",
-        "Ürün Adı",
-        "BİZİM FİYATIMIZ KDV HARİÇ",
-    ]
-    for firma in rakip_firmalar:
-        urun_rekabet_kaynaklari.extend(
-            [
-                f"{firma} STOK",
-                f"{firma} NET SATIŞ KDV HARİÇ",
-            ]
-        )
-    urun_rekabet_kaynaklari.extend(
-        [
-            "EN DÜŞÜK RAKİP FİYATI",
-            "ORTALAMA RAKİP FİYATI",
-            "EN YÜKSEK RAKİP FİYATI",
-            "RAKİP FARK %",
-            "FİYAT KONUMUMUZ",
-        ]
-    )
-    for satir_no in range(3, son_satir + 1):
-        hedef_satir = satir_no - 1
-        for hedef_col, kaynak_baslik in enumerate(urun_rekabet_kaynaklari, 1):
-            kaynak_col = index.get(kaynak_baslik)
-            if not kaynak_col:
-                continue
-            kaynak_hucre = f"{get_column_letter(kaynak_col)}{satir_no}"
-            urun_rekabet_ws.cell(
-                hedef_satir,
-                hedef_col,
-                f"='Fiyatlandırma'!{kaynak_hucre}",
-            )
-    for cell in urun_rekabet_ws[1]:
-        cell.fill = PatternFill("solid", fgColor="9C6500")
-        cell.font = Font(color="FFFFFF", bold=True)
-        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    urun_rekabet_ws.freeze_panes = "A2"
-    urun_rekabet_ws.auto_filter.ref = (
-        f"A1:{get_column_letter(len(urun_rekabet_basliklar))}{max(son_satir - 1, 2)}"
-    )
-    urun_rekabet_genislik = {
-        "ProductId": 12,
-        "Marka": 18,
-        "Kategori": 24,
-        "Ürün Web Servis Kodu": 24,
-        "Ürün Adı": 52,
-        "Bizim Fiyatımız KDV Hariç": 22,
-        "Fiyat Konumumuz": 24,
-        "Rakip Fark %": 16,
-    }
-    for col, baslik in enumerate(urun_rekabet_basliklar, 1):
-        urun_rekabet_ws.column_dimensions[get_column_letter(col)].width = (
-            urun_rekabet_genislik.get(baslik, 18)
-        )
-    for row in range(2, max(son_satir, 2)):
-        for col, baslik in enumerate(urun_rekabet_basliklar, 1):
-            if "FİYAT" in baslik or "Fiyat" in baslik or "SATIŞ" in baslik:
-                urun_rekabet_ws.cell(row, col).number_format = '#,##0.00'
-            if "FARK %" in baslik:
-                urun_rekabet_ws.cell(row, col).number_format = '0.00'
 
     hata_ws = wb.create_sheet("Hatalar")
     hata_baslik = ["ProductId", "Web Servis Kodu", "Firma", "Kaynak Dosya", "Kaynak Satır", "Hata"]
@@ -3958,6 +4753,19 @@ def main(argv=None) -> int:
             )
         print(f"TCMB döviz satış kurları alınıyor: {TCMB_KUR_URL}")
         ayarlar = tcmb_kurlarini_cek()
+        paket_ayar_kaynagi = PAKET_BIRIM_AYAR_DOSYASI
+        if args.cikti.exists():
+            try:
+                with pd.ExcelFile(args.cikti) as onceki_rapor:
+                    if "Paket Birim Ayarları" in onceki_rapor.sheet_names:
+                        paket_ayar_kaynagi = args.cikti
+            except Exception:
+                paket_ayar_kaynagi = PAKET_BIRIM_AYAR_DOSYASI
+        ayarlar["paket_birim"] = paket_birim_ayarlarini_oku(paket_ayar_kaynagi)
+        print(
+            "Paket/birim fiyat kuralı: "
+            f"{len(ayarlar['paket_birim']['satirlar'])} firma kuralı"
+        )
         print(
             "Kurlar: "
             f"USD={ayarlar['kurlar']['USD']} TL, "

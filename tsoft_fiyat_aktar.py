@@ -112,12 +112,23 @@ def _ortalama_net_alis(row, kolon_ciftleri):
     return sum(netler) / Decimal(len(netler))
 
 
+def aktif_urun_dogrula(row) -> None:
+    durum = metin_norm(row.get("T-SOFT AKTİFLİK", ""))
+    if durum == "PASIF":
+        raise ValueError("T-Soft ürünü pasif; fiyat aktarımı engellendi")
+    if durum != "AKTIF":
+        raise ValueError("T-Soft aktiflik bilgisi yok veya geçersiz")
+
+
 def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+    if "KATEGORİ KÂR ORANI" in df.columns and "AKTARIM DURUMU" in df.columns:
+        return gonderim_listesi_hazirla_fiyat_onay(df)
+
     gerekli = [
         "ProductId",
         "Ürün Web Servis Kodu",
+        "T-SOFT AKTİFLİK",
         "Fiyat Birimi",
-        "T-SOFT LİSTE FİYATI TL",
         "MİN. KÂR ORANI (MANUEL)",
         "HEDEF KÂR ORANI (MANUEL)",
         "SEÇİLEN İSKONTO",
@@ -138,13 +149,13 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
         try:
             if not kod:
                 raise ValueError("Web Servis Kodu boş")
+            aktif_urun_dogrula(row)
             ortalama = _ortalama_net_alis(row, kolon_ciftleri)
             if ortalama is None:
                 raise ValueError("Geçerli B2B liste/iskonto çifti yok")
             min_kar = ondalik(row.get("MİN. KÂR ORANI (MANUEL)"))
             hedef_kar = ondalik(row.get("HEDEF KÂR ORANI (MANUEL)"))
             secilen_iskonto = ondalik(row.get("SEÇİLEN İSKONTO"))
-            tsoft_liste_tl = ondalik(row.get("T-SOFT LİSTE FİYATI TL"))
             if min_kar is None or hedef_kar is None:
                 raise ValueError("Minimum veya hedef kâr oranı boş")
             if min_kar < 0 or hedef_kar < 0 or min_kar > 100 or hedef_kar > 100:
@@ -153,10 +164,8 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
                 raise ValueError("Minimum kâr oranı hedef kâr oranından büyük")
             if secilen_iskonto is None:
                 raise ValueError("Seçilen iskonto boş")
-            if secilen_iskonto < 0 or secilen_iskonto >= 100:
-                raise ValueError("Seçilen iskonto 0-100 aralığında olmalı")
-            if tsoft_liste_tl is None or tsoft_liste_tl <= 0:
-                raise ValueError("T-Soft liste fiyatı TL boş veya sıfır")
+            if secilen_iskonto >= 100:
+                raise ValueError("Seçilen iskonto 100'den küçük olmalı")
             gecerli_listeler = []
             for liste_col, iskonto_col in kolon_ciftleri:
                 liste = ondalik(row.get(liste_col))
@@ -183,18 +192,6 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
                 raise ValueError(
                     f"Seçilen fiyat {min_fiyat:.2f}-{hedef_fiyat:.2f} TL aralığında değil"
                 )
-            tsoft_secilen_satis = tsoft_liste_tl * (
-                Decimal("1") - secilen_iskonto / Decimal("100")
-            )
-            if tsoft_secilen_satis < ortalama * Decimal("1.05") - tolerans:
-                kar_yuzde = (
-                    (tsoft_secilen_satis / ortalama - Decimal("1"))
-                    * Decimal("100")
-                )
-                raise ValueError(
-                    f"Seçilen iskonto T-Soft fiyatında yalnızca %{kar_yuzde:.2f} "
-                    "kâr bırakıyor; minimum %5 olmalı"
-                )
             hazir.append(
                 {
                     "ProductId": str(row.get("ProductId", "")).strip(),
@@ -215,6 +212,90 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
                     "Seçilen Satış TL KDV Hariç": secilen.quantize(
                         Decimal("0.01"), rounding=ROUND_HALF_UP
                     ),
+                    "TSoft Ziyaretçiler Yüzde Farkı": -secilen_iskonto,
+                }
+            )
+        except Exception as exc:
+            hatalar.append(
+                {
+                    "Excel Satır": excel_satir,
+                    "Web Servis Kodu": kod,
+                    "Hata": str(exc),
+                }
+            )
+    return pd.DataFrame(hazir), hatalar
+
+
+def gonderim_listesi_hazirla_fiyat_onay(
+    df: pd.DataFrame,
+) -> tuple[pd.DataFrame, list[dict]]:
+    gerekli = [
+        "ProductId",
+        "Ürün Web Servis Kodu",
+        "T-SOFT AKTİFLİK",
+        "ORTALAMA ALIŞ",
+        "KATEGORİ KÂR ORANI",
+        "SATIŞ FİYATI",
+        "REEL KÂR ORANI",
+        "SEÇİLEN İSKONTO",
+        "ONAY",
+        "AKTARIM DURUMU",
+    ]
+    eksik = [k for k in gerekli if k not in df.columns]
+    if eksik:
+        raise ValueError(f"Fiyat Onay sayfasında eksik kolonlar: {', '.join(eksik)}")
+
+    hazir, hatalar = [], []
+    for excel_satir, (_, row) in enumerate(df.iterrows(), 3):
+        if metin_norm(row.get("ONAY", "")) != "EVET":
+            continue
+        kod = str(row.get("Ürün Web Servis Kodu", "")).strip()
+        try:
+            if not kod:
+                raise ValueError("Web Servis Kodu boş")
+            aktif_urun_dogrula(row)
+            durum = str(row.get("AKTARIM DURUMU", "")).strip()
+            if durum not in {"AKTARIMA HAZIR", "ZAM YAPILMALI"}:
+                raise ValueError(f"Aktarım durumu uygun değil: {durum or 'boş'}")
+            ortalama_alis = ondalik(row.get("ORTALAMA ALIŞ"))
+            kategori_kar = ondalik(row.get("KATEGORİ KÂR ORANI"))
+            satis_fiyati = ondalik(row.get("SATIŞ FİYATI"))
+            reel_kar = ondalik(row.get("REEL KÂR ORANI"))
+            secilen_iskonto = ondalik(row.get("SEÇİLEN İSKONTO"))
+            if ortalama_alis is None or ortalama_alis <= 0:
+                raise ValueError("Ortalama alış boş veya sıfır")
+            if kategori_kar is None or kategori_kar < 0:
+                raise ValueError("Kategori kâr oranı boş veya hatalı")
+            if satis_fiyati is None or satis_fiyati <= 0:
+                raise ValueError("Satış fiyatı boş veya sıfır")
+            if reel_kar is None:
+                raise ValueError("Reel kâr oranı hesaplanmamış")
+            # Frontend hesaplari Python float olarak JSON'a yazildiginda
+            # %7 degeri 6.999999999999984 gibi gelebilir. Gercek bir kar
+            # acigini gizlemeyecek kadar kucuk ayni toleransi kullan.
+            kar_toleransi = Decimal("0.0001")
+            if reel_kar + kar_toleransi < kategori_kar:
+                raise ValueError("Reel kâr oranı kategori kâr oranının altında")
+            if secilen_iskonto is None:
+                raise ValueError("Seçilen iskonto boş")
+            if secilen_iskonto >= 100:
+                raise ValueError("Seçilen iskonto 100'den küçük olmalı")
+            secilen_iskonto = secilen_iskonto.quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            hazir.append(
+                {
+                    "ProductId": str(row.get("ProductId", "")).strip(),
+                    "Web Servis Kodu": kod,
+                    "Ortalama Net Alış KDV Hariç": ortalama_alis.quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    ),
+                    "Kategori Kâr Oranı": kategori_kar,
+                    "Seçilen İskonto": secilen_iskonto,
+                    "Seçilen Satış TL KDV Hariç": satis_fiyati.quantize(
+                        Decimal("0.01"), rounding=ROUND_HALF_UP
+                    ),
+                    "Reel Kâr Oranı": reel_kar,
                     "TSoft Ziyaretçiler Yüzde Farkı": -secilen_iskonto,
                 }
             )
@@ -289,6 +370,15 @@ def api_payload_hazirla(df: pd.DataFrame) -> list[dict]:
     ]
 
 
+def frontend_json_oku(dosya: Path) -> pd.DataFrame:
+    if not dosya.exists():
+        raise FileNotFoundError(f"Frontend aktarım verisi yok: {dosya}")
+    kayitlar = json.loads(dosya.read_text(encoding="utf-8"))
+    if not isinstance(kayitlar, list) or not kayitlar:
+        raise ValueError("Frontend aktarım verisi boş veya geçersiz")
+    return pd.DataFrame(kayitlar).fillna("")
+
+
 def tsofta_gonder(df: pd.DataFrame) -> list[dict]:
     requests = requests_modulu()
     site, token = login()
@@ -335,17 +425,25 @@ def main(argv=None) -> int:
         description="Onaylı iskontoları T-Soft Ziyaretçiler özel grup fiyatına gönderir"
     )
     parser.add_argument("--onay", type=Path, default=ONAY_DOSYASI)
+    parser.add_argument("--frontend-json", type=Path)
     parser.add_argument("--gonder", action="store_true")
     args = parser.parse_args(argv)
     try:
-        if not args.onay.exists():
-            raise FileNotFoundError(f"Fiyatlandırma dosyası yok: {args.onay}")
-        df = pd.read_excel(
-            args.onay,
-            sheet_name="Fiyatlandırma",
-            header=1,
-            dtype=str,
-        ).fillna("")
+        if args.frontend_json:
+            df = frontend_json_oku(args.frontend_json)
+            print(f"Okunan kaynak: Frontend ({len(df)} seçili ürün)")
+        else:
+            if not args.onay.exists():
+                raise FileNotFoundError(f"Fiyatlandırma dosyası yok: {args.onay}")
+            excel = pd.ExcelFile(args.onay)
+            sayfa = "Fiyat Onay" if "Fiyat Onay" in excel.sheet_names else "Fiyatlandırma"
+            df = pd.read_excel(
+                args.onay,
+                sheet_name=sayfa,
+                header=1,
+                dtype=str,
+            ).fillna("")
+            print(f"Okunan sayfa: {sayfa}")
         hazir, hatalar = gonderim_listesi_hazirla(df)
         print(f"Onaylı ve geçerli iskonto: {len(hazir)}")
         print(f"Onaylı fakat hatalı iskonto: {len(hatalar)}")
@@ -359,7 +457,25 @@ def main(argv=None) -> int:
         if hazir.empty:
             raise RuntimeError("Gönderilecek onaylı iskonto yok")
         sonuclar = tsofta_gonder(hazir)
-        print(json.dumps(sonuclar, ensure_ascii=False, indent=2))
+        basarili = [s for s in sonuclar if s.get("Başarı") == "EVET"]
+        kontrol = [s for s in sonuclar if s.get("Başarı") != "EVET"]
+        basarili_urun = sum(int(s.get("Ürün Sayısı", 0)) for s in basarili)
+        print("=" * 56)
+        if not kontrol:
+            print("T-SOFT GÜNCELLEMESİ BAŞARIYLA TAMAMLANDI")
+            print(f"Başarıyla güncellenen ürün: {basarili_urun}")
+            print(f"Başarılı batch: {len(basarili)}/{len(sonuclar)}")
+            print("Hatalı batch: 0")
+        else:
+            print("T-SOFT GÜNCELLEMESİ KONTROL GEREKTİRİYOR")
+            print(f"Başarıyla güncellenen ürün: {basarili_urun}")
+            print(f"Başarılı batch: {len(basarili)}/{len(sonuclar)}")
+            print(f"Kontrol gereken batch: {len(kontrol)}")
+            for sonuc in kontrol:
+                print(json.dumps(sonuc, ensure_ascii=False))
+        print("=" * 56)
+        if kontrol:
+            return 1
         return 0
     except Exception as exc:
         print(f"HATA: {exc}")

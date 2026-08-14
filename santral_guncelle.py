@@ -15,6 +15,7 @@ CIKTI_DIR = BASE_DIR / "Cikti"
 LOG_DIR = BASE_DIR / "Log"
 
 CONFIG_FILE = AYARLAR_DIR / "tsoft_api.json"
+TEDARIKCI_AYAR_FILE = AYARLAR_DIR / "tedarikci_ayar.xlsx"
 SANTRAL_STOK_DOSYA = CIKTI_DIR / "SANTRAL" / "santral_stok_guncellenecekler.xlsx"
 
 BATCH_SIZE = 100
@@ -22,6 +23,29 @@ GUNCELLEME_HARIC_MARKALAR = {
     "WAGO", "ORTAÇ", "ORTAC", "OPAŞ", "OPAS", "ÖZNUR", "ÖZNUR KABLO",
     "OZNUR", "OZNUR KABLO", "MUCCO", "EMAS",
 }
+
+
+def santral_aktif_mi():
+    """Tedarikci ayarinda en az bir aktif SANTRAL satiri var mi?"""
+    if not TEDARIKCI_AYAR_FILE.exists():
+        print("Tedarikci ayar dosyasi bulunamadi; guvenlik icin SANTRAL calistirilmadi.")
+        return False
+
+    try:
+        ayarlar = pd.read_excel(TEDARIKCI_AYAR_FILE, dtype=str).fillna("")
+    except Exception as hata:
+        print(f"Tedarikci ayar dosyasi okunamadi; SANTRAL calistirilmadi: {hata}")
+        return False
+
+    if "Tedarikci" not in ayarlar.columns or "Aktif" not in ayarlar.columns:
+        print("Tedarikci ayarinda Tedarikci/Aktif kolonu yok; SANTRAL calistirilmadi.")
+        return False
+
+    santral = ayarlar[
+        ayarlar["Tedarikci"].astype(str).str.strip().str.upper().eq("SANTRAL")
+    ]
+    aktif_degerler = {"1", "TRUE", "AKTIF", "AKTİF"}
+    return santral["Aktif"].astype(str).str.strip().str.upper().isin(aktif_degerler).any()
 
 
 def guncelleme_haric_markalari_cikar(df):
@@ -457,6 +481,11 @@ def main():
     print("=== SANTRAL TUM MARKA T-SOFT STOK GUNCELLEME ===")
     print("Bu islem santral_stok_guncellenecekler.xlsx icindeki tum SANTRAL markalarini gonderir.")
     print()
+
+    if not santral_aktif_mi():
+        print("SANTRAL tedarikci_ayar.xlsx icinde PASIF.")
+        print("Dosya okunmadi, T-Soft API'ye baglanilmadi ve stok gonderilmedi.")
+        return
 
     site_url, username, password = config_oku()
     df = santral_stok_listesini_oku()
