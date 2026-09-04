@@ -40,7 +40,7 @@ FRONTEND_CACHE_DOSYASI = CIKTI_DIR / "_frontend_fiyat_cache.pkl"
 FRONTEND_AKTARIM_DOSYASI = CIKTI_DIR / "_frontend_tsoft_aktarim.json"
 HOST = "127.0.0.1"
 PORT = 8787
-APP_VERSION = "2026-08-13-frontend-aktarim-kontrol-v28"
+APP_VERSION = "2026-09-01-vekmar-dogrudan-fiyat-v29"
 WATCHED_FILES = [
     Path(__file__).resolve(),
     BASE_DIR / "fiyatlandirma_raporu.py",
@@ -369,7 +369,7 @@ HTML = r"""
       <div class="panel-body split">
         <div>
           <button onclick="runAction('rapor')">Fiyat Raporunu Oluştur</button>
-          <button class="secondary" onclick="runAction('kontrol')">T-Soft Aktarım Kontrol</button>
+          <button class="secondary" onclick="confirmControl()">T-Soft Aktarım Kontrol</button>
           <button class="red" onclick="confirmSend()">T-Soft'a Gönder</button>
           <p class="muted">Gönderim butonu yalnızca <b>ONAY=EVET</b> ve durumu <b>AKTARIMA HAZIR</b> veya <b>ZAM YAPILMALI</b> olan satırları gönderir.</p>
         </div>
@@ -760,6 +760,17 @@ function confirmSend() {
   }
 }
 
+function confirmControl() {
+  const productIds = [...selectedRows];
+  if (productIds.length) {
+    runAction("kontrol", {productIds});
+    return;
+  }
+  if (confirm("Seçili ürün yok. Tüm aktarıma hazır ürünler kontrol edilecek. Devam edilsin mi?")) {
+    runAction("kontrol", {});
+  }
+}
+
 async function pollJob() {
   const data = await api("/api/job");
   document.getElementById("job").textContent =
@@ -1028,12 +1039,15 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
             stok = sayi(row.get(f"{firma} STOK", ""))
             net = sayi(row.get(net_kolon, ""))
             iskonto = sayi(row.get(f"{firma} İSKONTO", ""))
+            liste = sayi(row.get(f"{firma} LİSTE", ""))
             if net is None:
-                liste = sayi(row.get(f"{firma} LİSTE", ""))
                 if liste is not None and liste > 0 and iskonto is not None:
                     net = liste * (1 - iskonto / 100)
+                elif firma == "VEKMAR" and liste is not None and liste > 0:
+                    # VEKMAR kampanya/iskontosuz satırlarında Geçerli Fiyat
+                    # zaten doğrudan net alış fiyatıdır.
+                    net = liste
             stok_gecerli = stok is not None and stok > 0
-            liste = sayi(row.get(f"{firma} LİSTE", ""))
             iskonto_gecerli = (
                 liste is not None
                 and liste > 0
@@ -1046,10 +1060,21 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
                 and net is not None
                 and net > 0
             )
+            vekmar_dogrudan_fiyati = (
+                firma == "VEKMAR"
+                and liste is not None
+                and liste > 0
+                and (iskonto is None or iskonto <= 0)
+                and net is not None
+                and net > 0
+            )
             kaynak_gecerli = (
                 iskonto_gecerli and (tek_alis_kaynagi or stok_gecerli)
             ) or (
                 stok_gecerli and sabit_aksiyon_fiyati
+            ) or (
+                vekmar_dogrudan_fiyati
+                and (tek_alis_kaynagi or stok_gecerli)
             )
             if kaynak_gecerli and net is not None and net > 0:
                 fiyatlar.append((firma, net, iskonto))
@@ -1741,7 +1766,12 @@ class Handler(BaseHTTPRequestHandler):
                     title = "Fiyat raporu oluşturuluyor"
                     cmd = [sys.executable, str(BASE_DIR / "fiyatlandirma_raporu.py")]
                 elif action == "kontrol":
-                    kayitlar = frontend_tum_aktarima_hazir_kayitlar()
+                    product_ids = payload.get("productIds", [])
+                    kayitlar = (
+                        frontend_aktarim_kayitlari(product_ids)
+                        if product_ids
+                        else frontend_tum_aktarima_hazir_kayitlar()
+                    )
                     if not kayitlar:
                         raise ValueError("Frontend'de aktarıma hazır ürün yok")
                     CIKTI_DIR.mkdir(exist_ok=True)

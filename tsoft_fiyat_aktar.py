@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 import pandas as pd
+from fiyat_kontrol_kurallari import aktarim_dogrula
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -150,6 +151,7 @@ def gonderim_listesi_hazirla(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]
             if not kod:
                 raise ValueError("Web Servis Kodu boş")
             aktif_urun_dogrula(row)
+            aktarim_dogrula(kod, ONAY_DOSYASI)
             ortalama = _ortalama_net_alis(row, kolon_ciftleri)
             if ortalama is None:
                 raise ValueError("Geçerli B2B liste/iskonto çifti yok")
@@ -254,6 +256,7 @@ def gonderim_listesi_hazirla_fiyat_onay(
             if not kod:
                 raise ValueError("Web Servis Kodu boş")
             aktif_urun_dogrula(row)
+            aktarim_dogrula(kod, ONAY_DOSYASI)
             durum = str(row.get("AKTARIM DURUMU", "")).strip()
             if durum not in {"AKTARIMA HAZIR", "ZAM YAPILMALI"}:
                 raise ValueError(f"Aktarım durumu uygun değil: {durum or 'boş'}")
@@ -352,10 +355,25 @@ def login():
 
 
 def api_basarili_mi(data) -> bool:
+    if isinstance(data, dict) and data.get("success") is True:
+        mesajlar = data.get("message")
+        if isinstance(mesajlar, list):
+            hatali_mesaj = any(
+                isinstance(mesaj, dict)
+                and (
+                    mesaj.get("type") not in (1, "1", None)
+                    or bool(mesaj.get("errorField"))
+                )
+                for mesaj in mesajlar
+            )
+            if not hatali_mesaj:
+                return True
+
     metin = json.dumps(data, ensure_ascii=False).lower()
-    if any(x in metin for x in ("error", "hata", "basarisiz", "yetkisiz", "unauthorized")):
+    hata_kelimeleri = ("hata", "basarisiz", "başarısız", "yetkisiz", "unauthorized")
+    if any(x in metin for x in hata_kelimeleri):
         return False
-    return any(x in metin for x in ("success", "basari", "pri001", "gni001"))
+    return any(x in metin for x in ("success", "basari", "başarı", "pri001", "pri019", "gni001"))
 
 
 def api_payload_hazirla(df: pd.DataFrame) -> list[dict]:
@@ -380,6 +398,9 @@ def frontend_json_oku(dosya: Path) -> pd.DataFrame:
 
 
 def tsofta_gonder(df: pd.DataFrame) -> list[dict]:
+    # Eski frontend JSON'u / dogrudan cagri da dogrulamayi atlayamaz.
+    for kod in df["Web Servis Kodu"]:
+        aktarim_dogrula(kod, ONAY_DOSYASI)
     requests = requests_modulu()
     site, token = login()
     LOG_DIR.mkdir(exist_ok=True)
@@ -421,6 +442,7 @@ def tsofta_gonder(df: pd.DataFrame) -> list[dict]:
 
 
 def main(argv=None) -> int:
+    global ONAY_DOSYASI
     parser = argparse.ArgumentParser(
         description="Onaylı iskontoları T-Soft Ziyaretçiler özel grup fiyatına gönderir"
     )
@@ -428,6 +450,7 @@ def main(argv=None) -> int:
     parser.add_argument("--frontend-json", type=Path)
     parser.add_argument("--gonder", action="store_true")
     args = parser.parse_args(argv)
+    ONAY_DOSYASI = args.onay
     try:
         if args.frontend_json:
             df = frontend_json_oku(args.frontend_json)

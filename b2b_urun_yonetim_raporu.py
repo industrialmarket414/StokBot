@@ -16,7 +16,10 @@ from openpyxl.utils import get_column_letter
 
 BASE_DIR = Path(__file__).resolve().parent
 VARSAYILAN_CIKTI_DIR = BASE_DIR / "Cikti"
-FIRMALAR = ["KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "MEANWELL", "YILDIZ"]
+FIRMALAR = [
+    "KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "MEANWELL", "YILDIZ",
+    "VEKMAR",
+]
 MANUEL_KOLONLAR = [
     "Nihai Karar",
     "Ana Tedarikci",
@@ -98,7 +101,7 @@ def stok_sayisina_cevir(deger) -> int | None:
 
 
 def kaynak_dosyalari_bul(cikti_dir: Path) -> list[tuple[str, Path]]:
-    """7 bayi icin eslesmeyen, stoklu aday ve stoksuz izleme dosyalarini bulur."""
+    """8 bayi icin eslesmeyen, stoklu aday ve stoksuz izleme dosyalarini bulur."""
     bulunan: list[tuple[str, Path]] = []
     for firma in FIRMALAR:
         firma_dir = cikti_dir / firma

@@ -16,6 +16,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 import pandas as pd
+from fiyat_kontrol_kurallari import dogrulanmis_paketleri_uygula, kaynak_kontrol_nedeni
 from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -43,6 +44,17 @@ FIYATLANDIRMA_KOD_MARKA_ONCELIGI = {
     # KIRAC/Elektrix'teki SAFAK KM-240 kablo makasi, T-Soft'taki
     # KARDES ELEKTRIK KM 240 ek muf ile ayni urun degildir.
     "KM 240": "KARDES ELEKTRIK",
+    # VEKMAR'daki ayni kisa kodlar SCHNEIDER urunlerine aittir; T-Soft'taki
+    # 15363/33606/33608/33609 kartlari ise LEGRAND urunleridir.
+    "15363": "LEGRAND",
+    "33606": "LEGRAND",
+    "33608": "LEGRAND",
+    "33609": "LEGRAND",
+    # Rakiplerdeki ayni kisa kodlar OREL fis ve INOLED LED trafolarina aittir;
+    # T-Soft'taki 1204/1206/1212 kartlari GWEST kablo baglaridir.
+    "1204": "GWEST",
+    "1206": "GWEST",
+    "1212": "GWEST",
     # Uc Faz'daki ayni kodlu VIKO telefon prizi, T-Soft'taki ARTLINE VGA
     # kapagiyla ayni urun degildir. Bu kodda yalniz ARTLINE rakibi kabul edilir.
     "92605513": "ARTLINE",
@@ -94,7 +106,7 @@ def paket_birim_ayarlarini_oku(dosya: Path = PAKET_BIRIM_AYAR_DOSYASI) -> dict:
     dosya = Path(dosya)
     sonuc = {"alis": {}, "alis_marka": {}, "rakip": {}, "satirlar": []}
     if not dosya.exists():
-        return sonuc
+        return dogrulanmis_paketleri_uygula(sonuc)
     df = pd.read_excel(
         dosya,
         sheet_name="Paket Birim Ayarları",
@@ -164,7 +176,7 @@ def paket_birim_ayarlarini_oku(dosya: Path = PAKET_BIRIM_AYAR_DOSYASI) -> dict:
                 "Fiyatın Kapsadığı Adet": kapsam,
                 "Kontrol Durumu": "ONAYLANDI",
             })
-    return sonuc
+    return dogrulanmis_paketleri_uygula(sonuc)
 
 
 def paket_fiyatini_birime_cevir(
@@ -211,6 +223,7 @@ KOLON_ADAYLARI = {
         "Liste Fiyat",
         "Eski Fiyat",
         "Satış Fiyatı",
+        "Geçerli Fiyat",
         "Fiyat",
         "List Price",
     ],
@@ -264,12 +277,18 @@ KOLON_ADAYLARI = {
     ],
     "para_birimi": [
         "Para Birimi",
+        "Para Br.",
         "Döviz",
         "Doviz",
         "Currency",
         "Fiyat Birimi",
         "Fiyat Birim",
         "Cinsi",
+    ],
+    "kampanya": [
+        "Kampanya",
+        "Kampanya Adı",
+        "Kampanya Adi",
     ],
 }
 
@@ -2600,12 +2619,28 @@ def kaynak_fiyatini_oku(
     min_paket_ham = row.get(kolonlar["min_paket"], "") if kolonlar["min_paket"] else ""
     stok_ham = row.get(kolonlar["stok"], "") if kolonlar["stok"] else ""
     para_ham = row.get(kolonlar["para_birimi"], "") if kolonlar["para_birimi"] else ""
+    kampanya_ham = row.get(kolonlar["kampanya"], "") if kolonlar["kampanya"] else ""
     aksiyon_fiyat = ondalik(aksiyon_ham)
     liste = ondalik(liste_ham)
     if (liste is None or liste <= 0) and (
         aksiyon_fiyat is None or aksiyon_fiyat <= 0
     ):
         raise ValueError("Liste fiyatı ve aksiyon fiyatı boş veya sıfır")
+
+    # VEKMAR'da "Geçerli Fiyat" kampanyalı satırda zaten net kampanya
+    # fiyatıdır. Kampanya iskontosu bilgi amaçlı gelse bile ikinci kez uygulanmaz.
+    # İskonto ve kampanya adı birlikte boşsa da Geçerli Fiyat doğrudan net
+    # fiyat kabul edilir; böylece iskontosuz ürün fiyatlandırmadan düşmez.
+    vekmar_dogrudan_fiyat = (
+        kolonlar["liste"] is not None
+        and metin_norm(kolonlar["liste"]) == "GECERLI FIYAT"
+        and (
+            bool(str(kampanya_ham).strip())
+            or not str(iskonto_ham).strip()
+        )
+    )
+    if vekmar_dogrudan_fiyat:
+        aksiyon_fiyat = liste
 
     if aksiyon_fiyat is not None and aksiyon_fiyat > 0:
         aksiyon_doviz = para_birimi_bul(aksiyon_ham, para_ham)
@@ -3972,6 +4007,10 @@ def fiyat_onay_sayfasi_ekle(
             ),
         )
 
+        if kaynak_kontrol_nedeni(urun.get("Web Servis Kodu", "")):
+            onay_ws.cell(hedef_satir, onay_index["ONAY"], "HAYIR")
+            onay_ws.cell(hedef_satir, onay_index["AKTARIM DURUMU"], "KAYNAK FİYAT KONTROLÜ")
+
     hedef_son_satir = max(son_satir, 3)
     thin = Side(style="thin", color="D9E2F3")
     input_fill = PatternFill("solid", fgColor="FFD966")
@@ -4497,6 +4536,10 @@ def rapor_olustur(
             ),
         )
 
+        if kaynak_kontrol_nedeni(urun.get("Web Servis Kodu", "")):
+            ws.cell(satir_no, index["ONAY"], "HAYIR")
+            ws.cell(satir_no, index["AKTARIM DURUMU"], "KAYNAK FİYAT KONTROLÜ")
+
     son_satir = max(len(urunler) + 2, 3)
     thin = Side(style="thin", color="D9E2F3")
     kaynak_fill = PatternFill("solid", fgColor="D9EAF7")
@@ -4753,14 +4796,10 @@ def main(argv=None) -> int:
             )
         print(f"TCMB döviz satış kurları alınıyor: {TCMB_KUR_URL}")
         ayarlar = tcmb_kurlarini_cek()
+        # Ayarlar klasöründeki dosya tek ve güncel kaynak olmalıdır. Önceki çıktı
+        # dosyasındaki gömülü sayfayı okumak, sonradan eklenen kuralların hiçbir
+        # zaman devreye girmemesine neden oluyordu.
         paket_ayar_kaynagi = PAKET_BIRIM_AYAR_DOSYASI
-        if args.cikti.exists():
-            try:
-                with pd.ExcelFile(args.cikti) as onceki_rapor:
-                    if "Paket Birim Ayarları" in onceki_rapor.sheet_names:
-                        paket_ayar_kaynagi = args.cikti
-            except Exception:
-                paket_ayar_kaynagi = PAKET_BIRIM_AYAR_DOSYASI
         ayarlar["paket_birim"] = paket_birim_ayarlarini_oku(paket_ayar_kaynagi)
         print(
             "Paket/birim fiyat kuralı: "

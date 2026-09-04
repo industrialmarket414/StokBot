@@ -42,7 +42,36 @@ SANTRAL_DUZELTME_SAYILARI_FILE = CIKTI_DIR / "santral_duzeltme_sayilari.xlsx"
 SANTRAL_DUZELTME_SAYILARI_GUNCEL_FILE = CIKTI_DIR / "santral_duzeltme_sayilari_GUNCEL.xlsx"
 SANTRAL_SON_CALISMA_FILE = CIKTI_DIR / "santral_son_calisma.txt"
 
-KOD_SURUMU = "DIA_24_MARKA_WAGO_SABIT_V131_2026_08_11"
+KOD_SURUMU = "STOK_MARKA_V137_2026_09_01"
+
+VEKMAR_MARKALARI = (
+    "SCHNEIDER",
+    "TELEMECANIQUE SENSORS",
+    "HİMEL",
+    "KLEMSAN",
+    "METE ENERJİ",
+    "SIEMENS",
+    "ŞAFAK",
+)
+
+VEKMAR_TEDARIKCI_AYARLARI = [
+    {
+        "Tedarikci": "VEKMAR",
+        "Aktif": "1",
+        "MarkaFiltresi": marka,
+        "DosyaUzantisi": ".xlsx",
+        "KodKolonu": "Ürün Kodu",
+        "StokKolonu": "Stok",
+        "MarkaKolonu": "Marka",
+        "EslesmeTipi": "WEBSERVIS",
+    }
+    for marka in VEKMAR_MARKALARI
+]
+
+# NOAS icin T-Soft'a gonderilecek stokta guvenlik rezervi tutulur.
+# Ham "Bayi Toplam Stok" degismez; yalnizca "Guncellenecek Stok"
+# max(toplam stok - rezerv, 0) olarak hesaplanir.
+NOAS_STOK_REZERVI = 100
 
 # Kendi B2B aktariminda yalnizca tek marka bulunan tedarikciler. Bu kaynaklarda
 # marka kolonu olmasa veya ayarda farkli bir kolon yazsa bile tum satirlar ilgili
@@ -128,7 +157,18 @@ SABIT_STOK_DOSYALARI = {
 # Ayni T-Soft Web Servis Kodu birden fazla gercek B2B markasinda kullanildiginda
 # canli stokta yalnizca burada secilen markanin satiri hesaba katilir.
 KOD_MARKA_ONCELIGI = {
+    # KONYA ayni SS kodlarini hem ORTAC hem SAFAK kartlarinda yayinliyor.
+    # T-Soft'taki bu bes urun ORTAC oldugu icin stokta yalniz ORTAC kullanilir.
+    "SS-200-2C": "ORTAC",
+    "SS-300-4C": "ORTAC",
+    "SS-360B-4C": "ORTAC",
+    "SS-360B-7C": "ORTAC",
+    "SS-2727B": "ORTAC",
     "15363": "LEGRAND",
+    "31301": "LEGRAND",
+    "33606": "LEGRAND",
+    "33608": "LEGRAND",
+    "33609": "LEGRAND",
     "28920": "SCHNEIDER ELECTRIC",
     "422060": "LEGRAND",
     "422037": "LEGRAND",
@@ -139,6 +179,9 @@ KOD_MARKA_ONCELIGI = {
     "2007": "GWEST",
     "2008": "GWEST",
     "2009": "GWEST",
+    "1204": "GWEST",
+    "1206": "GWEST",
+    "1212": "GWEST",
     "4006": "GWEST",
     "4007": "GWEST",
     "4008": "GWEST",
@@ -183,6 +226,18 @@ FIYATLANDIRMA_KOD_MARKA_ONCELIGI = {
     # KIRAC'taki SAFAK KM-240 bir kablo kesme makasidir. T-Soft'taki
     # KARDES ELEKTRIK KM 240 ise ek muftur.
     "KM 240": "KARDES ELEKTRIK",
+    # VEKMAR'daki ayni kisa kodlar SCHNEIDER urunlerine aittir; T-Soft'taki
+    # 15363/33606/33608/33609 kartlari ise LEGRAND urunleridir.
+    "15363": "LEGRAND",
+    "31301": "LEGRAND",
+    "33606": "LEGRAND",
+    "33608": "LEGRAND",
+    "33609": "LEGRAND",
+    # Rakiplerdeki ayni kisa kodlar OREL fis ve INOLED LED trafolarina aittir;
+    # T-Soft'taki 1204/1206/1212 kartlari GWEST kablo baglaridir.
+    "1204": "GWEST",
+    "1206": "GWEST",
+    "1212": "GWEST",
     # T-Soft'taki bu kisa kodlar GWEST'tir. Ayni kodlu NEAD urunleri farklidir.
     "1010": "GWEST",
     "2007": "GWEST",
@@ -375,8 +430,6 @@ def fiyatlandirma_kaynagi_kurallarini_uygula(df):
     )
     # HES için KONYA kaynağı hem stokta hem fiyatlandırmada kullanılmaz.
     konya_hes_maskesi = tedarikci_norm.eq("KONYA") & marka_norm.eq("HES")
-    # SANTRAL bugünlük pasiftir ve fiyatlandırmaya da taşınmaz.
-    santral_maskesi = tedarikci_norm.eq("SANTRAL")
     # ÖZNUR eşleşmeleri raporlansa bile fiyatlandırma hesabına hiç girmez.
     oznur_maskesi = marka_norm.isin({"OZNUR", "OZNUR KABLO"})
     # WAGO fiyatı B2B'den değil, yalnızca aşağıda eklenen WAGO SABİT'ten gelir.
@@ -399,7 +452,6 @@ def fiyatlandirma_kaynagi_kurallarini_uygula(df):
     haric_maskesi = (
         yalniz_yildiz_maskesi
         | konya_hes_maskesi
-        | santral_maskesi
         | oznur_maskesi
         | wago_b2b_maskesi
         | kod_marka_cakisma_maskesi
@@ -485,6 +537,30 @@ def cata_urun_kodu_temizle(kod):
     temiz = re.sub(r"^CATA[\.\-\s_]+", "", temiz).strip()
     temiz = re.sub(r"(?<=\d)-(?=[A-Z]+$)", "", temiz)
     return temiz
+
+
+def vekmar_urun_kodu_temizle(kod):
+    """Vekmar bayi on ekini atip ureticinin asil urun kodunu dondurur.
+
+    Ornekler: AG.SCH.15363 -> 15363, AG.SIE.3LD9200-5B -> 3LD9200-5B.
+    Yalnizca Vekmar'in AG.<marka> bicimi temizlenir; beklenmeyen kodlara
+    dokunulmaz.
+    """
+    temiz = kod_temizle(kod)
+    return re.sub(r"^AG\.[A-Z0-9]+\.", "", temiz).strip()
+
+
+def vekmar_marka_duzelt(kod, marka):
+    """VEKMAR kod on ekindeki uretici ailesini stok markasina yansitir.
+
+    VEKMAR, AG.TMS.* Telemecanique Sensors urunlerini dosyada SCHNEIDER
+    markasiyla yayinliyor. T-Soft ve diger bayilerde bu urunler
+    TELEMECANIQUE SENSORS olarak tutuldugu icin stok birlestirmeden once marka
+    kod on ekine gore duzeltilir.
+    """
+    if metin_norm(kod).startswith("AG.TMS."):
+        return "TELEMECANIQUE SENSORS"
+    return str(marka).strip()
 
 
 def cetinkaya_urun_kodu_temizle(kod):
@@ -1149,6 +1225,30 @@ def ayarlari_oku():
             [df, pd.DataFrame([meanwell_satiri])],
             ignore_index=True,
         )
+
+    # VEKMAR tek dosyada birden fazla marka yayinlar. Ayar Excel'i henuz
+    # guncellenmemis olsa bile desteklenen markalari dogru kod/stok/marka
+    # kolonlariyla otomatik olarak calismaya dahil et.
+    for vekmar_ayari in VEKMAR_TEDARIKCI_AYARLARI:
+        tedarikci_maskesi = df["Tedarikci"].apply(metin_norm).eq("VEKMAR")
+        marka_maskesi = df["MarkaFiltresi"].apply(metin_norm).eq(
+            metin_norm(vekmar_ayari["MarkaFiltresi"])
+        )
+        vekmar_maskesi = tedarikci_maskesi & marka_maskesi
+        if vekmar_maskesi.any():
+            for kolon, deger in vekmar_ayari.items():
+                if kolon not in df.columns:
+                    df[kolon] = ""
+                df.loc[vekmar_maskesi, kolon] = deger
+        else:
+            vekmar_satiri = {
+                kolon: vekmar_ayari.get(kolon, "")
+                for kolon in df.columns
+            }
+            df = pd.concat(
+                [df, pd.DataFrame([vekmar_satiri])],
+                ignore_index=True,
+            )
 
     df["Tedarikci"] = df["Tedarikci"].astype(str).str.strip()
     df["Aktif"] = df["Aktif"].astype(str).str.strip()
@@ -6394,6 +6494,12 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
 
         return pd.DataFrame()
 
+    if tedarikci_norm == "VEKMAR":
+        df[marka_kolonu] = [
+            vekmar_marka_duzelt(kod, marka)
+            for kod, marka in zip(df[kod_kolonu], df[marka_kolonu])
+        ]
+
     marka_kontrol_mask = df[marka_kolonu].apply(
         lambda x: marka_uygun_mu(x, marka_filtresi)
     )
@@ -6513,6 +6619,15 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
 
     sonuc["Manuel Tsoft Web Servis Kodu"] = ""
     sonuc["Eslesmede Kullanilacak Kod"] = sonuc["B2B Web Servis Kodu"]
+
+    if tedarikci_norm == "VEKMAR":
+        sonuc["Eslesmede Kullanilacak Kod"] = sonuc[
+            "Eslesmede Kullanilacak Kod"
+        ].apply(vekmar_urun_kodu_temizle)
+        sonuc["B2B Temiz Kod"] = sonuc["Eslesmede Kullanilacak Kod"].apply(
+            b2b_temiz_kod_uret
+        )
+        sonuc["B2B Sade Kod"] = sonuc["B2B Temiz Kod"].apply(sade_kod)
 
     if eslesme_tipi == "MANUEL_ESLESME":
         sonuc["Manuel Tsoft Web Servis Kodu"] = sonuc["B2B Web Servis Kodu"].apply(
@@ -7332,6 +7447,28 @@ def _liste_degerine_ekle(mevcut, eklenecek, ayirici=", "):
     return ayirici.join(degerler)
 
 
+def noas_stok_rezervini_uygula(df):
+    """NOAS canli stokundan rezervi dusurur; negatif stok olusturmaz."""
+    sonuc = df.copy()
+    if sonuc.empty or "B2B Marka" not in sonuc.columns:
+        return sonuc
+
+    noas_maskesi = sonuc["B2B Marka"].apply(
+        lambda deger: metin_norm(marka_adi_standart(deger))
+    ).eq("NOAS")
+    if not noas_maskesi.any():
+        return sonuc
+
+    guncellenecek = pd.to_numeric(
+        sonuc.loc[noas_maskesi, "Guncellenecek Stok"],
+        errors="coerce",
+    ).fillna(0).astype(int)
+    sonuc.loc[noas_maskesi, "Guncellenecek Stok"] = (
+        guncellenecek - NOAS_STOK_REZERVI
+    ).clip(lower=0)
+    return sonuc
+
+
 def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
     """Marka bazinda izinli stok kaynaklarini tek toplamda birlestirir.
 
@@ -7520,6 +7657,10 @@ def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
         CIKTI_DIR / "wago_dia_eslesme_raporu.xlsx",
     )
 
+    # Tum B2B, DIA ve sabit stok katkilarinin toplami tamamlandiktan sonra
+    # NOAS rezervi son gonderilecek degere bir kez uygulanir.
+    sonuc = noas_stok_rezervini_uygula(sonuc)
+
     sonuc_marka_norm = sonuc["B2B Marka"].apply(
         lambda deger: metin_norm(marka_adi_standart(deger))
     )
@@ -7577,6 +7718,30 @@ def b2b_eslesme_bul(eslesmede_kullanilacak_kod, tsoft_df, lookup):
         return tsoft_df.loc[idx], tip, deger
 
     return "COKLU", kullanilanlar[0][0], kullanilanlar[0][1]
+
+
+def vekmar_direkt_eslesme_bul(b2b_row, tsoft_df):
+    """VEKMAR kodunu yalnızca birebir T-Soft Web Servis Kodu ile eşleştirir.
+
+    VEKMAR özellikle KLEMSAN'da yalnızca rakamlardan oluşan üretici kodları
+    gönderir. Genel SADE anahtarı boşlukları attığı için KLEMSAN ``305160``
+    kodunu OPAŞ ``305 160`` ürününe bağlayabilir. Marka bilgisi T-Soft
+    aktarımında ayrı kolon olmadığı için VEKMAR'da gevşek eşleşme güvenli
+    değildir.
+    """
+    if metin_norm(b2b_row.get("Tedarikci", "")) != "VEKMAR":
+        return None
+
+    aranan_kod = kod_temizle(b2b_row.get("Eslesmede Kullanilacak Kod", ""))
+    bulunanlar = tsoft_df.index[
+        tsoft_df["Tsoft Temiz Kod"].eq(aranan_kod)
+    ].tolist()
+
+    if len(bulunanlar) == 0:
+        return None, "VEKMAR_BIREBIR", aranan_kod
+    if len(bulunanlar) == 1:
+        return tsoft_df.loc[bulunanlar[0]], "VEKMAR_BIREBIR", aranan_kod
+    return "COKLU", "VEKMAR_BIREBIR", aranan_kod
 
 
 def oznurkablo_direkt_eslesme_bul(b2b_row, tsoft_df):
@@ -8717,6 +8882,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
         "SANTRAL STOK",
         "MET STOK",
         "KLTSHOP STOK",
+        "VEKMAR STOK",
         "TOPLAM BAYİ STOK",
     ]
 
@@ -8752,7 +8918,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
     )
     bayi_ozet.columns.name = None
 
-    for firma in ["KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP"]:
+    for firma in ["KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "VEKMAR"]:
         if firma not in bayi_ozet.columns:
             bayi_ozet[firma] = 0
         bayi_ozet = bayi_ozet.rename(columns={firma: f"{firma} STOK"})
@@ -8769,6 +8935,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
         + ozet["SANTRAL STOK"]
         + ozet["MET STOK"]
         + ozet["KLTSHOP STOK"]
+        + ozet["VEKMAR STOK"]
     )
     for kolon in kolonlar[1:]:
         ozet[kolon] = pd.to_numeric(ozet[kolon], errors="coerce").fillna(0).astype(int)
@@ -8786,6 +8953,7 @@ def tum_bayiler_tsoftta_yok_urunleri_olustur(b2bde_var_sitede_yok_df):
         "KLTSHOP",
         "MEANWELL",
         "YILDIZ",
+        "VEKMAR",
     ]
     sonuc_kolonlari = [
         "Marka",
@@ -9028,6 +9196,9 @@ def duzenli_raporlari_kaydet(
     yildiz_tsoftta_yok_stok_var, yildiz_tsoftta_yok_stok_yok = (
         tsoftta_yok_stoga_gore_ayir("YILDIZ")
     )
+    vekmar_tsoftta_yok_stok_var, vekmar_tsoftta_yok_stok_yok = (
+        tsoftta_yok_stoga_gore_ayir("VEKMAR")
+    )
 
     bayi_raporlari = {
         "KONYA": konya_raporlar or {},
@@ -9064,6 +9235,14 @@ def duzenli_raporlari_kaydet(
             ),
             "yildiz_tsoftta_yok_b2b_stok_var": yildiz_tsoftta_yok_stok_var,
             "yildiz_tsoftta_yok_b2b_stok_yok": yildiz_tsoftta_yok_stok_yok,
+        },
+        "VEKMAR": {
+            "vekmar_eslesmeyenler": genel_eslesmeyenler_olustur("VEKMAR"),
+            "vekmar_stok_guncellenecekler": guncelleme_kaynagi_kurallarini_uygula(
+                tedarikciye_gore_filtrele(tedarikci_bazli_df, "VEKMAR")
+            ),
+            "vekmar_tsoftta_yok_b2b_stok_var": vekmar_tsoftta_yok_stok_var,
+            "vekmar_tsoftta_yok_b2b_stok_yok": vekmar_tsoftta_yok_stok_yok,
         },
     }
 
@@ -9562,6 +9741,7 @@ def main():
             tsoft_df,
         )
         oznur_direkt_sonuc = oznurkablo_direkt_eslesme_bul(b2b_row, tsoft_df)
+        vekmar_direkt_sonuc = vekmar_direkt_eslesme_bul(b2b_row, tsoft_df)
 
         if santral_manuel_tsoft_row is not None:
             tsoft_row = santral_manuel_tsoft_row
@@ -9569,6 +9749,8 @@ def main():
             kullanilan_kod = str(tsoft_row["ProductId"]).strip()
         elif oznur_direkt_sonuc is not None:
             tsoft_row, eslesme_bicimi, kullanilan_kod = oznur_direkt_sonuc
+        elif vekmar_direkt_sonuc is not None:
+            tsoft_row, eslesme_bicimi, kullanilan_kod = vekmar_direkt_sonuc
         elif metin_norm(b2b_row.get("Tedarikci", "")) == "YILDIZ":
             tsoft_row, eslesme_bicimi, kullanilan_kod = yildiz_direkt_eslesme_bul(
                 b2b_kod,
