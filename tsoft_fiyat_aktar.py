@@ -16,7 +16,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 import pandas as pd
-from fiyat_kontrol_kurallari import aktarim_dogrula
+from fiyat_kontrol_kurallari import aktarim_dogrula, fiyat_guncelleme_harici_mi
 
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -467,6 +467,28 @@ def main(argv=None) -> int:
                 dtype=str,
             ).fillna("")
             print(f"Okunan sayfa: {sayfa}")
+
+        kod_kolonu = next(
+            (kolon for kolon in ("Web Servis Kodu", "Ürün Web Servis Kodu") if kolon in df.columns),
+            None,
+        )
+        if kod_kolonu:
+            haric_maske = df[kod_kolonu].map(fiyat_guncelleme_harici_mi)
+            haric_sayisi = int(haric_maske.sum())
+            if haric_sayisi:
+                haric_kodlar = sorted(
+                    {
+                        str(kod).strip()
+                        for kod in df.loc[haric_maske, kod_kolonu]
+                        if str(kod).strip()
+                    }
+                )
+                print(
+                    "Fiyat guncellemesi disinda birakilan: "
+                    f"{haric_sayisi} ({', '.join(haric_kodlar)})"
+                )
+                df = df.loc[~haric_maske].copy()
+
         hazir, hatalar = gonderim_listesi_hazirla(df)
         print(f"Onaylı ve geçerli iskonto: {len(hazir)}")
         print(f"Onaylı fakat hatalı iskonto: {len(hatalar)}")

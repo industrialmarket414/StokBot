@@ -21,6 +21,9 @@ BATCH_SIZE = 100
 GUNCELLEME_HARIC_MARKALAR = {
     "WAGO", "ORTAC", "OPAS", "OZNUR", "OZNUR KABLO", "MUCCO", "EMAS",
 }
+YILDIZ_DUSUK_STOK_MARKALARI = {
+    "ACK", "CATA", "BTICINO", "BITICINO", "VIKO", "THEA", "ARTLINE",
+}
 
 
 def urun_kodu_temizle(deger):
@@ -256,6 +259,11 @@ def yildiz_stok_listesini_oku():
             .str.translate(str.maketrans("ÇĞİÖŞÜ", "CGIOSU"))
         )
         haric_maskesi = marka_norm.isin(GUNCELLEME_HARIC_MARKALAR)
+        # Eski raporlarda NEAD 1004, GWEST urunu 28634'e yanlis eslesebiliyor.
+        haric_maskesi |= (
+            df["ProductId"].astype(str).str.strip().eq("28634")
+            & marka_norm.eq("NEAD")
+        )
         haric_sayi = int(haric_maskesi.sum())
         if haric_sayi:
             print(f"Guvenlik filtresi: guncelleme disi marka satiri: {haric_sayi}")
@@ -277,6 +285,13 @@ def guncelleme_listesi_hazirla(df):
         product_code = urun_kodu_temizle(row["Web Servis Kodu"])
 
         guncellenecek_stok = sayiya_cevir(row["B2B Stok Metni"])
+        marka = str(row.get("B2B Marka", "")).strip()
+        if (
+            str(row.get("Tedarikci", "")).strip().upper() == "YILDIZ"
+            and marka.upper() in YILDIZ_DUSUK_STOK_MARKALARI
+            and guncellenecek_stok <= 30
+        ):
+            guncellenecek_stok = -5
 
         if not product_id:
             hatalar.append(f"Excel satir {index + 2}: ProductId bos.")
@@ -291,7 +306,7 @@ def guncelleme_listesi_hazirla(df):
             "ProductCode": product_code,
             "Web Servis Kodu": product_code,
             "Guncellenecek Stok": guncellenecek_stok,
-            "B2B Marka": str(row.get("B2B Marka", "")).strip(),
+            "B2B Marka": marka,
             "Model": str(row.get("Model", "")).strip(),
         })
 

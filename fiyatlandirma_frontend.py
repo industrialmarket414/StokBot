@@ -27,6 +27,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pandas as pd
 
+from fiyat_kontrol_kurallari import norm, rakip_karsilastirmasi_yapilmayacak_mi
+
 
 BASE_DIR = Path(__file__).resolve().parent
 CIKTI_DIR = BASE_DIR / "Cikti"
@@ -40,10 +42,11 @@ FRONTEND_CACHE_DOSYASI = CIKTI_DIR / "_frontend_fiyat_cache.pkl"
 FRONTEND_AKTARIM_DOSYASI = CIKTI_DIR / "_frontend_tsoft_aktarim.json"
 HOST = "127.0.0.1"
 PORT = 8787
-APP_VERSION = "2026-09-01-vekmar-dogrudan-fiyat-v29"
+APP_VERSION = "2026-10-02-rakip-metin-stok-v33"
 WATCHED_FILES = [
     Path(__file__).resolve(),
     BASE_DIR / "fiyatlandirma_raporu.py",
+    BASE_DIR / "fiyat_kontrol_kurallari.py",
     BASE_DIR / "tsoft_fiyat_aktar.py",
 ]
 
@@ -941,6 +944,20 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
         except Exception:
             return None
 
+    def rakip_stokta_var_mi(deger):
+        """Rakip stok alanindaki sayi veya metin durumunu birlikte yorumlar."""
+        stok_sayisi = sayi(deger)
+        if stok_sayisi is not None:
+            return stok_sayisi > 0
+        return norm(deger) in {
+            "VAR",
+            "STOK VAR",
+            "STOKTA",
+            "STOKTA VAR",
+            "MEVCUT",
+            "IN STOCK",
+        }
+
     def kolon_al(kolon, kaynak=None, default=""):
         kaynak = fiyat if kaynak is None else kaynak
         if kolon in kaynak.columns:
@@ -1034,6 +1051,10 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
             0,
         )
         tek_alis_kaynagi = urun_kaynak_sayisi == 1
+        weidmuller_urunu = (
+            str(row.get("Marka", "")).strip().upper().replace("Ü", "U")
+            == "WEIDMULLER"
+        )
         for net_kolon in b2b_net_kolonlari:
             firma = str(net_kolon).replace(" NET ALIŞ KDV HARİÇ", "")
             stok = sayi(row.get(f"{firma} STOK", ""))
@@ -1052,7 +1073,14 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
                 liste is not None
                 and liste > 0
                 and iskonto is not None
-                and iskonto > 0
+                and (
+                    iskonto > 0
+                    or (
+                        firma.strip().upper() == "KONYA"
+                        and weidmuller_urunu
+                        and iskonto == 0
+                    )
+                )
             )
             sabit_aksiyon_fiyati = (
                 firma.endswith(" SABIT")
@@ -1088,8 +1116,16 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
             iskonto = sayi(row.get(f"{firma} İSKONTO", ""))
             if liste is None or liste <= 0 or iskonto is None:
                 continue
-            if not (
+            iskonto_gecerli = (
                 iskonto > 0
+                or (
+                    firma.strip().upper() == "KONYA"
+                    and weidmuller_urunu
+                    and iskonto == 0
+                )
+            )
+            if not (
+                iskonto_gecerli
                 and (tek_alis_kaynagi or (stok is not None and stok > 0))
             ):
                 continue
@@ -1156,11 +1192,17 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
     en_uygun_iskontolar = []
     en_uygun_stok_durumlari = []
     for _, row in fiyat.iterrows():
+        if rakip_karsilastirmasi_yapilmayacak_mi(row.get("Kategori", "")):
+            en_uygun_firmalar.append("")
+            en_uygun_satislar.append("")
+            en_uygun_iskontolar.append("")
+            en_uygun_stok_durumlari.append("")
+            continue
         stoklu_hedef = None
         stoksuz_hedef = None
         for net_kolon in rakip_net_kolonlari:
             firma = str(net_kolon).replace(" NET SATIŞ KDV HARİÇ", "")
-            stok = sayi(row.get(f"{firma} STOK", ""))
+            stok_var = rakip_stokta_var_mi(row.get(f"{firma} STOK", ""))
             net = sayi(row.get(net_kolon, ""))
             if net is None or net <= 0:
                 continue
@@ -1169,7 +1211,7 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
             aday = (firma, net, iskonto)
             if stoksuz_hedef is None or net < stoksuz_hedef[1]:
                 stoksuz_hedef = aday
-            if stok is not None and stok > 0:
+            if stok_var:
                 if stoklu_hedef is None or net < stoklu_hedef[1]:
                     stoklu_hedef = aday
         secilen_rakip = stoklu_hedef or stoksuz_hedef
@@ -1190,20 +1232,29 @@ def oku_fiyat_onay(data_only: bool = True) -> pd.DataFrame:
         df[KATEGORI_KAR] = rapor_kar
     else:
         df[KATEGORI_KAR] = ""
+    kategori_oranlari = {}
+    try:
+        kategori_df = oku_kategoriler()
+        for _, row in kategori_df.iterrows():
+            kategori = str(row.get("Kategori", "")).strip()
+            oran = row.get("Kar Orani", "")
+            if kategori:
+                kategori_oranlari[norm(kategori)] = oran
+    except Exception:
+        pass
+    fallback_kar = df["Kategori"].map(
+        lambda kategori: kategori_oranlari.get(norm(kategori), "")
+    ).fillna("").astype(str)
     bos_kar_mask = df[KATEGORI_KAR].astype(str).str.strip().eq("")
     if bos_kar_mask.any():
-        kategori_oranlari = {}
-        try:
-            kategori_df = oku_kategoriler()
-            for _, row in kategori_df.iterrows():
-                kategori = str(row.get("Kategori", "")).strip()
-                oran = row.get("Kar Orani", "")
-                if kategori:
-                    kategori_oranlari[kategori] = oran
-        except Exception:
-            pass
-        fallback_kar = df["Kategori"].map(kategori_oranlari).fillna("").astype(str)
         df.loc[bos_kar_mask, KATEGORI_KAR] = fallback_kar[bos_kar_mask]
+
+    rakipsiz_kategori_mask = df["Kategori"].map(
+        rakip_karsilastirmasi_yapilmayacak_mi
+    )
+    df.loc[rakipsiz_kategori_mask, KATEGORI_KAR] = fallback_kar[
+        rakipsiz_kategori_mask
+    ]
 
     satislar = []
     reel_karlar = []

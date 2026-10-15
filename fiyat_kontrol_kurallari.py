@@ -11,12 +11,41 @@ import unicodedata
 import xml.etree.ElementTree as ET
 import zipfile
 
-SURUM = "2026-09-02-paket-denetimi-v5"
+SURUM = "2026-09-30-paket-denetimi-v6"
 
 def norm(value):
     text = str(value or "").strip().upper().translate(str.maketrans("ÇĞİÖŞÜ", "CGIOSU"))
     text = ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
     return re.sub(r'[^A-Z0-9]+', ' ', text).strip()
+
+
+# Bu kategoriler fiyatlandırılırken rakip fiyatları tamamen yok sayılır ve
+# doğrudan kategori kâr oranı uygulanır.
+RAKIP_KARSILASTIRMASI_YAPILMAYACAK_KATEGORILER = {
+    "N2XH Kablolar",
+    "NYA Kablolar",
+    "NYA Kablolar - HFFR",
+    "NYAF Kablolar",
+    "NYAF Kablolar - HFFR",
+    "NYM (Antigron) Kablolar",
+    "TTR Kablolar",
+    "Yeraltı Kabloları",
+    "Fiber Optik Kablolar",
+    "Kumanda Kabloları",
+    "NHXMH Kablolar",
+    "Sinyal Kabloları",
+    "Solar Kablolar",
+    "TTR Kablolar - HFFR",
+    "Yangına Dayanıklı Kablolar",
+    "Kablo Kanalları",
+}
+_RAKIPSIZ_KATEGORI_ANAHTARLARI = {
+    norm(kategori) for kategori in RAKIP_KARSILASTIRMASI_YAPILMAYACAK_KATEGORILER
+}
+
+
+def rakip_karsilastirmasi_yapilmayacak_mi(kategori) -> bool:
+    return norm(kategori) in _RAKIPSIZ_KATEGORI_ANAHTARLARI
 
 # code, supplier, source kind, covered units, brand, category
 # Elektrik Malzemesi kaynak adlarinda acikca 100 ADET yazan SS urunleri.
@@ -41,17 +70,74 @@ PAKET_KURALLARI = [
     ('SS-200-4C','ELEKTRIX','rakip',100,'ŞAFAK ELEKTRİK','Kablo Bağları ve Sabitleme Klipsleri'),
     ('SS-TM-2','ELEKTRIX','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
     ('SS-TM-2B','ELEKTRIX','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('446449','ELEKTRİK MALZEMESİ','rakip',100,'KLEMSAN','Ray Klemensler'),
+    ('537380S','SANTRAL','alis',500,'KLEMSAN','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('ODBK34','ELEKTRİK MALZEMESİ','rakip',25,'ORTAÇ','Spiral Rakorları'),
+    ('SS-300-4C','ELEKTRİK MALZEMESİ','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('SS-360B-4C','ELEKTRİK MALZEMESİ','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('BY-251','ELEKTRIX','rakip',200,'ŞAFAK ELEKTRİK','Ek Muflar'),
+    ('SS-250-4C','ELEKTRİK MALZEMESİ','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('SS-250B-3C','ELEKTRİK MALZEMESİ','rakip',100,'ORTAÇ','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('UY-23040','ELEKTRIX','rakip',100,'ŞAFAK ELEKTRİK','Kablo Yüksükleri'),
+    ('UY-23160','ELEKTRİK MALZEMESİ','rakip',50,'ŞAFAK ELEKTRİK','Kablo Yüksükleri'),
+    ('UY-3060','ELEKTRIX','rakip',250,'ŞAFAK ELEKTRİK','Kablo Yüksükleri'),
+    ('AS03-00600','BÜYÜK KALPLER','rakip',5,'ACK','Neon Ledler'),
+    ('1526','ELEKTRİK MALZEMESİ','rakip',100,'GWEST','Etiketler'),
+    ('3709','ELEKTRİK MALZEMESİ','rakip',5,'GWEST','Dağıtım Ünitesi'),
+    ('1211','ELEKTROMARKETİM','rakip',100,'GWEST','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('3411','ELEKTROMARKETİM','rakip',75,'GWEST','Kablo Pabuçları'),
+    ('3432','ELEKTROMARKETİM','rakip',1000,'GWEST','Kablo Pabuçları'),
+    ('3440','ELEKTROMARKETİM','rakip',200,'GWEST','Kablo Pabuçları'),
+    ('3604','ELEKTRİK MALZEMESİ','rakip',60,'GWEST','Otomat Baraları'),
+    ('001 020 160023 00 11','ELEKTRİK MALZEMESİ','rakip',50,'MUTLUSAN','Spiraller'),
+    ('2409','ELEKTROMARKETİM','rakip',250,'GWEST','Kablo Yüksükleri'),
+    ('3209','ELEKTROMARKETİM','rakip',100,'GWEST','Kablo Pabuçları'),
+    ('3400','ELEKTROMARKETİM','rakip',500,'GWEST','Kablo Pabuçları'),
+    ('1038','ELEKTROMARKETİM','rakip',100,'GWEST','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('3018','ELEKTRİK MALZEMESİ','rakip',100,'GWEST','Kablo Pabuçları'),
+    ('3208','ELEKTRİK MALZEMESİ','rakip',100,'GWEST','Kablo Pabuçları'),
+    ('4273','ELEKTROMARKETİM','rakip',200,'GWEST','Daralan Makaronlar'),
+    ('3239','ELEKTROMARKETİM','rakip',200,'GWEST','Kablo Pabuçları'),
+    ('3452','ELEKTROMARKETİM','rakip',75,'GWEST','Kablo Pabuçları'),
+    ('4275','ELEKTROMARKETİM','rakip',100,'GWEST','Daralan Makaronlar'),
+    ('4222','ELEKTROMARKETİM','rakip',100,'GWEST','Daralan Makaronlar'),
+    ('1502','ELEKTRİK MALZEMESİ','rakip',100,'GWEST','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('1503','ELEKTROMARKETİM','rakip',100,'GWEST','Kablo Bağları ve Sabitleme Klipsleri'),
+    ('4262','ELEKTROMARKETİM','rakip',100,'GWEST','Daralan Makaronlar'),
+    ('3439','ELEKTROMARKETİM','rakip',200,'GWEST','Kablo Pabuçları'),
+    ('3409','ELEKTROMARKETİM','rakip',100,'GWEST','Kablo Pabuçları'),
+    ('4249','ELEKTROMARKETİM','rakip',25,'GWEST','Daralan Makaronlar'),
+    ('4318','ELEKTROMARKETİM','rakip',25,'GWEST','Daralan Makaronlar'),
+    ('4334','ELEKTROMARKETİM','rakip',25,'GWEST','Daralan Makaronlar'),
+    ('3402','ELEKTROMARKETİM','rakip',400,'GWEST','Kablo Pabuçları'),
+    ('3393','ELEKTROMARKETİM','rakip',50,'GWEST','Kablo Pabuçları'),
+    ('3459','ELEKTROMARKETİM','rakip',30,'GWEST','Kablo Pabuçları'),
+    ('3453','ELEKTROMARKETİM','rakip',50,'GWEST','Kablo Pabuçları'),
+    ('3454','ELEKTROMARKETİM','rakip',50,'GWEST','Kablo Pabuçları'),
+    ('3431','ELEKTRİK MALZEMESİ','rakip',1000,'GWEST','Kablo Pabuçları'),
+    ('4005','ELEKTROMARKETİM','rakip',200,'GWEST','Daralan Makaronlar'),
+    ('4240','ELEKTROMARKETİM','rakip',100,'GWEST','Daralan Makaronlar'),
 ] + [(code,'ELEKTRİK MALZEMESİ','rakip',100,
        'ŞAFAK ELEKTRİK' if code == 'SS-200-4C' else 'ORTAÇ',
        'Kablo Bağları ve Sabitleme Klipsleri') for code in SS_KODLARI]
 
 # KONYA 505000: kaynakta liste 0,05 EUR / adet; tekrar 500'e bolunemez.
-IPTAL_KURALLAR = {(norm('505000'),norm('KONYA'),'ALIS')}
+IPTAL_KURALLAR = {
+    (norm('505000'),norm('KONYA'),'ALIS'),
+    (norm('537380S'),norm('KONYA'),'ALIS'),
+}
 DUZELTILEN_KODLAR = {norm(rule[0]) for rule in PAKET_KURALLARI}
 
 # MET dosyasında NOAS ürünlerinin Min. Paket Adedi 1 olarak doğrulandı.
 # Bu ürünler normal fiyat hesabına girer; zam gerektirenler raporda ayrıca işaretlenir.
-BEKLEYEN_KONTROLLER = {}
+BEKLEYEN_KONTROLLER = {
+    norm('PKE32M435'): 'Fiyat güncellenmeyecek; stok yalnız DIA.',
+}
+FIYAT_GUNCELLEME_HARICI_KODLAR = {norm('PKE32M435')}
+
+def fiyat_guncelleme_harici_mi(code):
+    """Fiyati bilerek sabit tutulan ve aktarim listesinden atlanacak urunler."""
+    return norm(code) in FIYAT_GUNCELLEME_HARICI_KODLAR
 
 def kaynak_kontrol_nedeni(code):
     return BEKLEYEN_KONTROLLER.get(norm(code), '')

@@ -137,6 +137,50 @@ YILDIZ_MARKALAR = [
 ]
 
 
+ANKA_MARKALAR = [
+    "ACK",
+    "BEMİS",
+    "CATA",
+    "ÇETİNKAYA",
+    "EMAS",
+    "ENTES",
+    "FINDER",
+    "GWEST",
+    "HİMEL",
+    "IŞILDAR",
+    "Kraus & Naimer",
+    "LEGRAND",
+    "MEANWELL",
+    "METE ENERJİ",
+    "MUCCO",
+    "MUTLUSAN",
+    "NADE",
+    "NEAD",
+    "OMRON",
+    "OPAŞ",
+    "ORTAÇ",
+    "Phoenix Contact",
+    "ŞAFAK",
+    "SCHRACK",
+    "SIEMENS",
+    "TP ELEKTRİK",
+    "ÜNAL",
+    "VİKO",
+    "WEIDMULLER",
+]
+
+
+VEKMAR_MARKALAR = [
+    "SCHNEIDER",
+    "TELEMECANIQUE SENSORS",
+    "HİMEL",
+    "KLEMSAN",
+    "METE ENERJİ",
+    "SIEMENS",
+    "ŞAFAK",
+]
+
+
 def eski_ayari_yedekle():
     if not AYAR_FILE.exists():
         print("Eski tedarikci_ayar.xlsx bulunamadı, yeni dosya oluşturulacak.")
@@ -279,6 +323,42 @@ def yildiz_satirlari_olustur():
     return satirlar
 
 
+def anka_satirlari_olustur():
+    satirlar = []
+
+    for marka in ANKA_MARKALAR:
+        satirlar.append({
+            "Tedarikci": "ANKA",
+            "Aktif": 1,
+            "MarkaFiltresi": marka,
+            "DosyaUzantisi": ".xlsx",
+            "KodKolonu": "Ürün Kodu",
+            "StokKolonu": "Stok",
+            "MarkaKolonu": "Marka",
+            "EslesmeTipi": "WEBSERVIS",
+        })
+
+    return satirlar
+
+
+def vekmar_satirlari_olustur():
+    satirlar = []
+
+    for marka in VEKMAR_MARKALAR:
+        satirlar.append({
+            "Tedarikci": "VEKMAR",
+            "Aktif": 1,
+            "MarkaFiltresi": marka,
+            "DosyaUzantisi": ".xlsx",
+            "KodKolonu": "Ürün Kodu",
+            "StokKolonu": "Stok",
+            "MarkaKolonu": "Marka",
+            "EslesmeTipi": "WEBSERVIS",
+        })
+
+    return satirlar
+
+
 def ayar_dosyasi_yaz(df):
     try:
         with pd.ExcelWriter(AYAR_FILE, engine="openpyxl") as writer:
@@ -305,6 +385,8 @@ def main():
     satirlar.extend(kltshop_satirlari_olustur())
     satirlar.extend(meanwell_satirlari_olustur())
     satirlar.extend(yildiz_satirlari_olustur())
+    satirlar.extend(vekmar_satirlari_olustur())
+    satirlar.extend(anka_satirlari_olustur())
 
     df = pd.DataFrame(satirlar)
 
@@ -338,6 +420,8 @@ def main():
     print("KLTSHOP marka sayısı:", len(KLTSHOP_MARKALAR))
     print("MEANWELL marka sayısı:", len(MEANWELL_MARKALAR))
     print("YILDIZ marka sayısı:", len(YILDIZ_MARKALAR))
+    print("VEKMAR marka sayısı:", len(VEKMAR_MARKALAR))
+    print("ANKA marka sayısı:", len(ANKA_MARKALAR))
     print("Toplam ayar satırı:", len(df))
 
     print()

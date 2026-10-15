@@ -16,7 +16,11 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 
 import pandas as pd
-from fiyat_kontrol_kurallari import dogrulanmis_paketleri_uygula, kaynak_kontrol_nedeni
+from fiyat_kontrol_kurallari import (
+    dogrulanmis_paketleri_uygula,
+    kaynak_kontrol_nedeni,
+    rakip_karsilastirmasi_yapilmayacak_mi,
+)
 from openpyxl import Workbook
 from openpyxl.formatting.rule import FormulaRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -308,6 +312,8 @@ RAKIP_AYAR_KOLONLARI = [
 ]
 VARSAYILAN_RAKIP_FIRMALAR = [
     "STAR AKIM",
+    "ANELEKTROMARKETIM",
+    "ELPİM SHOP",
     "ELEKTROMARKETİM",
     "ELEKTRİK MARKET",
     "AYDINLATMA DÜNYAM",
@@ -325,6 +331,8 @@ VARSAYILAN_RAKIP_FIRMALAR = [
 
 RAKIP_DOSYA_ESLESMELERI = [
     ("STAR AKIM", ("STAR", "AKIM")),
+    ("ANELEKTROMARKETIM", ("ANEL", "MARKET")),
+    ("ELPİM SHOP", ("ELPIMSHOP",)),
     ("ELEKTROMARKETİM", ("ELEKTROMARKETIM",)),
     ("ELEKTRİK MARKET", ("ELEKTRIK", "MARKET")),
     ("AYDINLATMA DÜNYAM", ("AYDINLATMADUNYAM",)),
@@ -2510,7 +2518,7 @@ def mutlak_dosya_yolu(deger) -> Path:
 
 
 def varsayilan_rakip_ayarlari() -> list[dict]:
-    """Rakipler klasöründeki üç rakip dosyasını dosya adından otomatik bulur."""
+    """Rakipler klasöründeki tanımlı rakip dosyalarını adlarından otomatik bulur."""
     desteklenenler = {".xlsx", ".xls", ".csv"}
     dosyalar = (
         [p for p in RAKIP_DIZINI.iterdir() if p.is_file() and p.suffix.lower() in desteklenenler]
@@ -2712,7 +2720,10 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
             if not dosya.exists():
                 raise FileNotFoundError(f"Rakip dosyası yok: {dosya}")
             df = dosya_oku(dosya)
-            kod_col = kolon_bul(df.columns, [ayar["KodKolonu"], "Web Servis Kodu", "Ürün Kodu", "Kod"])
+            kod_col = kolon_bul(
+                df.columns,
+                [ayar["KodKolonu"], "Web Servis Kodu", "Ürün Kodu", "�r�n Kodu", "Kod"],
+            )
             stok_col = kolon_bul(
                 df.columns,
                 [
@@ -2726,13 +2737,19 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
             )
             liste_col = kolon_bul(
                 df.columns,
-                [ayar.get("ListeFiyatiKolonu", ""), "Liste Fiyatı", "Liste"],
+                [
+                    ayar.get("ListeFiyatiKolonu", ""),
+                    "Liste Fiyatı",
+                    "Liste Fiyat�",
+                    "Liste",
+                ],
             )
             satis_col = kolon_bul(
                 df.columns,
                 [
                     ayar.get("SatisFiyatiKolonu", ""),
                     "Satış Fiyatı",
+                    "Sat�� Fiyat�",
                     "Satis Fiyati",
                     "İndirimli Fiyat",
                     "Indirimli Fiyat",
@@ -2742,7 +2759,12 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
             )
             isk_col = kolon_bul(
                 df.columns,
-                [ayar.get("IskontoKolonu", ""), "İskonto", "Iskonto"],
+                [
+                    ayar.get("IskontoKolonu", ""),
+                    "İskonto",
+                    "�skonto %",
+                    "Iskonto",
+                ],
             )
             net_col = kolon_bul(
                 df.columns,
@@ -2764,7 +2786,14 @@ def rakip_verilerini_oku(rakip_ayarlari: list[dict], ayarlar: dict):
             marka_col = kolon_bul(df.columns, ["Marka", "Brand"])
             urun_adi_col = kolon_bul(
                 df.columns,
-                ["Ürün Adı", "Urun Adi", "Ürün İsmi", "Urun Ismi", "Product Name"],
+                [
+                    "Ürün Adı",
+                    "�r�n Ad�",
+                    "Urun Adi",
+                    "Ürün İsmi",
+                    "Urun Ismi",
+                    "Product Name",
+                ],
             )
             onayli_eslesmeler = (
                 {
@@ -3561,16 +3590,19 @@ def rakip_stokta_var_mi(stok) -> bool:
 def alis_kaynagi_kullanilabilir_mi(
     fiyat: dict | None,
     *,
+    tedarikci: str = "",
+    marka: str = "",
     tek_kaynak: bool = False,
 ) -> bool:
     """Ürünün kaynak sayısına göre kullanılabilir alış fiyatını belirler.
 
-    Birden fazla kaynak varsa yalnız stoklu ve pozitif alış iskontolu kaynak
+    Birden fazla kaynak varsa yalnız stoklu ve geçerli alış iskontolu kaynak
     hesaba girer. Ürün yalnız tek kaynakta bulunuyorsa stok olmasa da pozitif
-    liste + pozitif iskonto ile hesaplanan net alış kullanılabilir. İskontosu
-    yüzde 0/boş olan normal kayıt hiçbir durumda kullanılmaz. Açık aksiyon
-    fiyatı ise mevcut davranışı korur ve yalnız stok varsa doğrudan net alış
-    istisnası olarak kullanılır.
+    liste + geçerli iskonto ile hesaplanan net alış kullanılabilir. Konya'dan
+    gelen Weidmüller ürünlerindeki sayısal yüzde 0 iskonto, liste fiyatının net
+    alış fiyatı olduğu anlamına gelir. Diğer marka/kaynaklardaki yüzde 0 ve tüm
+    boş iskontolar kullanılmaz. Açık aksiyon fiyatı ise mevcut davranışı korur
+    ve yalnız stok varsa doğrudan net alış istisnası olarak kullanılır.
     """
     if not fiyat:
         return False
@@ -3583,13 +3615,23 @@ def alis_kaynagi_kullanilabilir_mi(
     if fiyat.get("aksiyon_fiyati_kullanildi") is True:
         return stoklu
     liste = ondalik(fiyat.get("liste_tl"))
-    pozitif_liste_iskonto = bool(
+    iskonto_gecerli = bool(
+        iskonto is not None
+        and (
+            iskonto > 0
+            or (
+                metin_norm(tedarikci) == "KONYA"
+                and metin_norm(marka) == "WEIDMULLER"
+                and iskonto == 0
+            )
+        )
+    )
+    liste_iskonto_gecerli = bool(
         liste is not None
         and liste > 0
-        and iskonto is not None
-        and iskonto > 0
+        and iskonto_gecerli
     )
-    return pozitif_liste_iskonto and (tek_kaynak or stoklu)
+    return liste_iskonto_gecerli and (tek_kaynak or stoklu)
 
 
 def alis_kaynagi_stokta_var_mi(fiyat: dict | None) -> bool:
@@ -3836,6 +3878,8 @@ def fiyat_onay_sayfasi_ekle(
                 continue
             if not alis_kaynagi_kullanilabilir_mi(
                 fiyat,
+                tedarikci=tedarikci,
+                marka=urun.get("Marka", ""),
                 tek_kaynak=tek_alis_kaynagi,
             ):
                 continue
@@ -3883,7 +3927,10 @@ def fiyat_onay_sayfasi_ekle(
         en_uygun_iskonto = ""
         en_uygun_fiyat = None
         herhangi_rakip_var = False
-        for firma in rakip_firmalar:
+        rakipsiz_kategori = rakip_karsilastirmasi_yapilmayacak_mi(
+            urun.get("Kategori", "")
+        )
+        for firma in ([] if rakipsiz_kategori else rakip_firmalar):
             kayit = rakip_haritasi.get((metin_norm(firma), kod_norm))
             if kayit:
                 herhangi_rakip_var = True
@@ -3925,7 +3972,7 @@ def fiyat_onay_sayfasi_ekle(
         onay_ws.cell(
             hedef_satir,
             onay_index["EN UYGUN SATIŞ FİYATI"],
-            f"={ana_sayfa}!{en_uygun_ref}",
+            "" if rakipsiz_kategori else f"={ana_sayfa}!{en_uygun_ref}",
         )
         onay_ws.cell(
             hedef_satir,
@@ -4315,14 +4362,24 @@ def rapor_olustur(
                 f"{get_column_letter(index[f'{t} NET ALIŞ KDV HARİÇ'])}{satir_no}"
             )
             stok_ref = f"{get_column_letter(index[f'{t} STOK'])}{satir_no}"
-            # Tek kaynaklı üründe pozitif liste + pozitif iskonto stok olmasa da
-            # kullanılabilir. Çok kaynaklı üründe stok şartı devam eder. İskontosu
-            # boş ve net hücresi sabit sayı olan açık aksiyon fiyatı yalnız stok
-            # varsa doğrudan net alış istisnasıdır.
+            # Tek kaynaklı üründe pozitif liste + geçerli iskonto stok olmasa da
+            # kullanılabilir. Konya'dan gelen Weidmüller ürünlerinin sayısal %0
+            # iskontosu geçerlidir; diğer marka/kaynaklarda iskonto pozitif
+            # olmalıdır. Çok kaynaklı üründe stok şartı devam eder. İskontosu boş
+            # ve net hücresi sabit sayı olan açık aksiyon fiyatı yalnız stok varsa
+            # doğrudan net alış istisnasıdır.
+            iskonto_gecerli = (
+                f"AND(ISNUMBER({isk_ref}),{isk_ref}>=0)"
+                if (
+                    metin_norm(t) == "KONYA"
+                    and metin_norm(urun.get("Marka", "")) == "WEIDMULLER"
+                )
+                else f"{isk_ref}>0"
+            )
             normal_kaynak_gecerli = (
-                f"AND({liste_ref}>0,{isk_ref}>0)"
+                f"AND({liste_ref}>0,{iskonto_gecerli})"
                 if tek_alis_kaynagi
-                else f"AND({stok_ref}>0,{liste_ref}>0,{isk_ref}>0)"
+                else f"AND({stok_ref}>0,{liste_ref}>0,{iskonto_gecerli})"
             )
             kaynak_gecerli = (
                 f"AND(ISNUMBER({net_ref}),{net_ref}>0,OR("

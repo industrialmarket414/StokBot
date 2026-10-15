@@ -42,7 +42,7 @@ SANTRAL_DUZELTME_SAYILARI_FILE = CIKTI_DIR / "santral_duzeltme_sayilari.xlsx"
 SANTRAL_DUZELTME_SAYILARI_GUNCEL_FILE = CIKTI_DIR / "santral_duzeltme_sayilari_GUNCEL.xlsx"
 SANTRAL_SON_CALISMA_FILE = CIKTI_DIR / "santral_son_calisma.txt"
 
-KOD_SURUMU = "STOK_MARKA_V137_2026_09_01"
+KOD_SURUMU = "STOK_MARKA_V138_2026_09_08"
 
 VEKMAR_MARKALARI = (
     "SCHNEIDER",
@@ -73,6 +73,9 @@ VEKMAR_TEDARIKCI_AYARLARI = [
 # max(toplam stok - rezerv, 0) olarak hesaplanir.
 NOAS_STOK_REZERVI = 100
 
+# Bu kodlarda B2B ve sabit stoklar hesaba katılmaz; yalnızca DIA miktarı gönderilir.
+YALNIZCA_DIA_STOK_KODLARI = {"PKE32M435"}
+
 # Kendi B2B aktariminda yalnizca tek marka bulunan tedarikciler. Bu kaynaklarda
 # marka kolonu olmasa veya ayarda farkli bir kolon yazsa bile tum satirlar ilgili
 # marka ile T-Soft Web Servis Kodu uzerinden eslestirilir.
@@ -98,6 +101,10 @@ YALNIZCA_YILDIZDAN_GUNCELLENECEK_MARKALAR = {
     "ARTLINE",
     "THEA",
     "ACK",
+}
+
+YILDIZ_DUSUK_STOK_MARKALARI = {
+    "ACK", "CATA", "BTICINO", "BITICINO", "VIKO", "THEA", "ARTLINE",
 }
 
 # Kalici olarak canli stok guncellemesinden cikartilan markalar. OZNUR tum
@@ -164,6 +171,10 @@ KOD_MARKA_ONCELIGI = {
     "SS-360B-4C": "ORTAC",
     "SS-360B-7C": "ORTAC",
     "SS-2727B": "ORTAC",
+    "SS-100W-2C": "ORTAC",
+    "SS-200-4C": "ORTAC",
+    "SS-250-4C": "ORTAC",
+    "SS-250B-3C": "ORTAC",
     "15363": "LEGRAND",
     "31301": "LEGRAND",
     "33606": "LEGRAND",
@@ -176,6 +187,8 @@ KOD_MARKA_ONCELIGI = {
     "10521": "NADE",
     "770101": "LEGRAND",
     "2006": "GWEST",
+    "1008": "GWEST",
+    "1010": "GWEST",
     "2007": "GWEST",
     "2008": "GWEST",
     "2009": "GWEST",
@@ -195,6 +208,8 @@ KOD_MARKA_ONCELIGI = {
     "3701": "GWEST",
     "3702": "GWEST",
     "4004": "GWEST",
+    "4005": "GWEST",
+    "5019": "GWEST",
     "7050": "GWEST",
     "RT424024": "SCHRACK",
     "RT424730": "SCHRACK",
@@ -240,14 +255,21 @@ FIYATLANDIRMA_KOD_MARKA_ONCELIGI = {
     "1212": "GWEST",
     # T-Soft'taki bu kisa kodlar GWEST'tir. Ayni kodlu NEAD urunleri farklidir.
     "1010": "GWEST",
+    "1008": "GWEST",
     "2007": "GWEST",
     "2008": "GWEST",
     "4005": "GWEST",
+    "5019": "GWEST",
     "4007": "GWEST",
     "4008": "GWEST",
     "4009": "GWEST",
     "4010": "GWEST",
     "4011": "GWEST",
+    # ANKA ORTAC kodlariyla ayni hedefe gelen SAFAK satirlari farkli urundur.
+    "SS-100W-2C": "ORTAC",
+    "SS-200-4C": "ORTAC",
+    "SS-250-4C": "ORTAC",
+    "SS-250B-3C": "ORTAC",
 }
 
 # YILDIZ B2B'deki OZN.001.xxx kodlari T-Soft kodunun kisaltilmis hali degildir;
@@ -348,6 +370,8 @@ def marka_adi_standart(deger):
         "OPAS": "OPAŞ",
         "OZNUR": "ÖZNUR KABLO",
         "OZNUR KABLO": "ÖZNUR KABLO",
+        "TP ELECTRIC": "TP ELECTRIC",
+        "TP ELEKTRIK": "TP ELECTRIC",
     }
     return gorunum.get(norm, norm)
 
@@ -403,6 +427,25 @@ def guncelleme_kaynagi_kurallarini_uygula(df):
         | kod_marka_onceligi_maskesi
     )
     return sonuc[~haric_maskesi].copy()
+
+
+def yildiz_dusuk_stok_kuralini_uygula(df):
+    """YILDIZ raporunda secili markalarin 30 ve alti stokunu -5 yazar."""
+    sonuc = df.copy()
+    if sonuc.empty:
+        return sonuc
+
+    marka_norm = sonuc["B2B Marka"].apply(
+        lambda deger: metin_norm(marka_adi_standart(deger))
+    )
+    stok = pd.to_numeric(sonuc["Yeni Stok"], errors="coerce")
+    maske = (
+        sonuc["Tedarikci"].apply(metin_norm).eq("YILDIZ")
+        & marka_norm.isin(YILDIZ_DUSUK_STOK_MARKALARI)
+        & stok.le(30)
+    )
+    sonuc.loc[maske, ["Yeni Stok", "B2B Stok Metni"]] = -5
+    return sonuc
 
 
 def fiyatlandirma_kaynagi_kurallarini_uygula(df):
@@ -500,6 +543,13 @@ def marka_uygun_mu(marka, marka_filtresi):
         return True
 
     return marka_filtresi in marka
+
+
+def tedarikci_marka_uygun_mu(marka, marka_filtresi, tedarikci):
+    """ANKA'da marka filtresini birebir, diger bayilerde mevcut kuralla uygular."""
+    if metin_norm(tedarikci) == "ANKA":
+        return metin_norm(marka) == metin_norm(marka_filtresi)
+    return marka_uygun_mu(marka, marka_filtresi)
 
 
 def entes_prefix_sil(kod):
@@ -734,6 +784,63 @@ def weidmuller_konya_urun_kodu_temizle(kod):
     temiz = kod_temizle(kod)
     temiz = re.sub(r"^WDM[\.\-\s_]+", "", temiz).strip()
     return para_birimi_temizle(temiz)
+
+
+ANKA_MARKA_KOD_ONEKLERI = {
+    "ACK": ("ACK",),
+    "BEMIS": ("BMS",),
+    "EMAS": ("EMAS",),
+    "ENTES": ("ENTES", "ENT"),
+    "FINDER": ("FND",),
+    "GWEST": ("GWEST",),
+    "HIMEL": ("HML",),
+    "KRAUS & NAIMER": ("KRD",),
+    "LEGRAND": ("LGRND",),
+    "MEANWELL": ("MW",),
+    "METE ENERJI": ("MT",),
+    "MUCCO": ("MUC",),
+    "MUTLUSAN": ("MTS",),
+    "NADE": ("NADE",),
+    "NEAD": ("NEAD",),
+    "OMRON": ("OMR",),
+    "OPAS": ("OPAS", "OPS"),
+    "ORTAC": ("ORT",),
+    "PHOENIX CONTACT": ("PH",),
+    "SAFAK ELEKTRIK": ("SFK",),
+    "SIEMENS": ("SMS",),
+    "TP ELECTRIC": ("TP",),
+    "UNAL": ("UNAL",),
+    "VIKO": ("VK",),
+    "WEIDMULLER": ("WDM",),
+}
+
+
+def anka_urun_kodu_temizle(kod, marka):
+    """ANKA bayi öneklerini yalnızca ilgili markada kaldırır.
+
+    Kalan kod değiştirilmez. Böylece aynı kısa öneki kullanan farklı ürün
+    aileleri veya başka tedarikçiler bu kurallardan etkilenmez.
+    """
+    temiz = kod_temizle(kod)
+    marka_norm = metin_norm(marka_adi_standart(marka))
+
+    if marka_norm == "CATA" and re.fullmatch(r"CAT\d+", temiz):
+        return f"CT-{temiz[3:]}"
+
+    for on_ek in ANKA_MARKA_KOD_ONEKLERI.get(marka_norm, ()):
+        duzeltilmis = re.sub(
+            rf"^{re.escape(on_ek)}[.\-\s_]+",
+            "",
+            temiz,
+        ).strip()
+        if duzeltilmis != temiz:
+            temiz = duzeltilmis
+            break
+
+    if marka_norm == "LEGRAND":
+        temiz = bas_sifir_sil(temiz)
+
+    return temiz
 
 
 def woer_konya_urun_kodu_temizle(kod):
@@ -6501,7 +6608,7 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
         ]
 
     marka_kontrol_mask = df[marka_kolonu].apply(
-        lambda x: marka_uygun_mu(x, marka_filtresi)
+        lambda x: tedarikci_marka_uygun_mu(x, marka_filtresi, tedarikci)
     )
 
     kirac_entes_dogrudan_sade_kodlar = set()
@@ -6553,7 +6660,7 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
         eslesme_tipi = "WEBSERVIS"
 
     filtre = df[marka_kolonu].apply(
-        lambda x: marka_uygun_mu(x, marka_filtresi)
+        lambda x: tedarikci_marka_uygun_mu(x, marka_filtresi, tedarikci)
     )
 
     marka_df = df[filtre].copy()
@@ -6624,6 +6731,19 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
         sonuc["Eslesmede Kullanilacak Kod"] = sonuc[
             "Eslesmede Kullanilacak Kod"
         ].apply(vekmar_urun_kodu_temizle)
+        sonuc["B2B Temiz Kod"] = sonuc["Eslesmede Kullanilacak Kod"].apply(
+            b2b_temiz_kod_uret
+        )
+        sonuc["B2B Sade Kod"] = sonuc["B2B Temiz Kod"].apply(sade_kod)
+
+    if tedarikci_norm == "ANKA":
+        sonuc["Eslesmede Kullanilacak Kod"] = sonuc.apply(
+            lambda row: anka_urun_kodu_temizle(
+                row["Eslesmede Kullanilacak Kod"],
+                row["B2B Marka"],
+            ),
+            axis=1,
+        )
         sonuc["B2B Temiz Kod"] = sonuc["Eslesmede Kullanilacak Kod"].apply(
             b2b_temiz_kod_uret
         )
@@ -7178,6 +7298,44 @@ def b2b_tedarikci_oku(ayar, santral_lookup):
             errors="ignore"
         )
 
+    # ANKA'da noktalama/tire farkıyla birden fazla bayi kodu aynı T-Soft
+    # ürününe gidebilir. Stokları toplama; aynı marka ve temiz kodda en yüksek
+    # stoklu tek satırı kullan.
+    if tedarikci_norm == "ANKA" and not sonuc.empty:
+        sonuc = sonuc.copy()
+        sonuc["_ANKA_TEKRAR_MARKA"] = sonuc["B2B Marka"].apply(
+            lambda deger: metin_norm(marka_adi_standart(deger))
+        )
+        sonuc["_ANKA_TEKRAR_KOD"] = sonuc["Eslesmede Kullanilacak Kod"].apply(
+            sade_kod
+        )
+        sonuc["_ANKA_STOK_SECIM"] = pd.to_numeric(
+            sonuc["Yeni Stok"], errors="coerce"
+        ).fillna(-1)
+
+        anahtar_var = sonuc["_ANKA_TEKRAR_KOD"].astype(str).str.strip().ne("")
+        kodlu = sonuc[anahtar_var].copy()
+        kodsuz = sonuc[~anahtar_var].copy()
+        kodlu = kodlu.sort_values(
+            by=[
+                "_ANKA_TEKRAR_MARKA",
+                "_ANKA_TEKRAR_KOD",
+                "_ANKA_STOK_SECIM",
+                "B2B Satır No",
+            ],
+            ascending=[True, True, False, True],
+            kind="stable",
+        ).drop_duplicates(
+            subset=["_ANKA_TEKRAR_MARKA", "_ANKA_TEKRAR_KOD"],
+            keep="first",
+        )
+        sonuc = pd.concat([kodlu, kodsuz], ignore_index=True, sort=False)
+        sonuc = sonuc.sort_values("B2B Satır No", kind="stable").reset_index(drop=True)
+        sonuc = sonuc.drop(
+            columns=["_ANKA_TEKRAR_MARKA", "_ANKA_TEKRAR_KOD", "_ANKA_STOK_SECIM"],
+            errors="ignore",
+        )
+
     # YILDIZ tekrar kuralı:
     # Aynı marka içinde T-Soft'ta aynı Web Servis Koduna gidecek birden fazla
     # satır varsa stoklar toplanmaz. En yüksek stoklu satır güncellemeye girer.
@@ -7650,6 +7808,24 @@ def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
     if yeni_satirlar:
         sonuc = pd.concat([sonuc, pd.DataFrame(yeni_satirlar)], ignore_index=True, sort=False)
 
+    # Özel ürünlerde marka genelindeki kaynak kuralını geçersiz kıl ve yalnız DIA'yı kullan.
+    dia_kaynaklari = kaynak_df[kaynak_df["Kaynak"].eq("DIA")]
+    dia_stok_haritasi = dia_kaynaklari.groupby("Temiz Kod")["Kaynak Stok"].sum().to_dict()
+    sonuc_kod_norm = sonuc["Web Servis Kodu"].apply(metin_norm)
+    for urun_kodu in YALNIZCA_DIA_STOK_KODLARI:
+        urun_maskesi = sonuc_kod_norm.eq(metin_norm(urun_kodu))
+        if not urun_maskesi.any():
+            continue
+        dia_stok = int(dia_stok_haritasi.get(metin_norm(urun_kodu), 0) or 0)
+        sonuc.loc[urun_maskesi, "Bayi Toplam Stok"] = 0
+        sonuc.loc[urun_maskesi, "DIA Stok"] = dia_stok
+        sonuc.loc[urun_maskesi, "Sabit Stok"] = 0
+        sonuc.loc[urun_maskesi, "Guncellenecek Stok"] = dia_stok
+        sonuc.loc[urun_maskesi, "Guncelleme Durumu"] = "GONDERILECEK"
+        sonuc.loc[urun_maskesi, "Tedarikciler"] = "DIA"
+        sonuc.loc[urun_maskesi, "B2B Kodları"] = urun_kodu
+        sonuc.loc[urun_maskesi, "Kaynak Satır Sayısı"] = 1
+
     rapor_df = pd.DataFrame(rapor_satirlari).drop_duplicates()
     excel_kaydet_guvenli(rapor_df, CIKTI_DIR / "dia_sabit_stok_eslesme_raporu.xlsx")
     excel_kaydet_guvenli(
@@ -7659,7 +7835,8 @@ def marka_stok_kaynaklarini_uygula(hazir_df, tsoft_df):
 
     # Tum B2B, DIA ve sabit stok katkilarinin toplami tamamlandiktan sonra
     # NOAS rezervi son gonderilecek degere bir kez uygulanir.
-    sonuc = noas_stok_rezervini_uygula(sonuc)
+    # Bugunluk MET/NOAS aktariminda kaynak dosyadaki stok aynen kullanilacak.
+    # sonuc = noas_stok_rezervini_uygula(sonuc)
 
     sonuc_marka_norm = sonuc["B2B Marka"].apply(
         lambda deger: metin_norm(marka_adi_standart(deger))
@@ -7718,6 +7895,64 @@ def b2b_eslesme_bul(eslesmede_kullanilacak_kod, tsoft_df, lookup):
         return tsoft_df.loc[idx], tip, deger
 
     return "COKLU", kullanilanlar[0][0], kullanilanlar[0][1]
+
+
+ANKA_TSOFT_URUN_ADI_MARKA_ON_EKLERI = {
+    "ACK": ("ACK",),
+    "BEMIS": ("BEMIS",),
+    "CATA": ("CATA",),
+    "CETINKAYA": ("CETINKAYA",),
+    "EMAS": ("EMAS",),
+    "ENTES": ("ENTES",),
+    "FINDER": ("FINDER",),
+    "GWEST": ("GWEST",),
+    "HIMEL": ("HIMEL",),
+    "ISILDAR": ("ISILDAR",),
+    "KRAUS & NAIMER": ("KRAUS",),
+    "LEGRAND": ("LEGRAND",),
+    "MEANWELL": ("MEANWELL",),
+    "METE ENERJI": ("METE",),
+    "MUCCO": ("MUCCO",),
+    "MUTLUSAN": ("MUTLUSAN",),
+    "NADE": ("NADE",),
+    "NEAD": ("NEAD",),
+    "OMRON": ("OMRON",),
+    "OPAS": ("OPAS",),
+    "ORTAC": ("ORTAC",),
+    "PHOENIX CONTACT": ("PHOENIX",),
+    "SAFAK ELEKTRIK": ("SAFAK",),
+    "SCHRACK": ("SCHRACK",),
+    "SIEMENS": ("SIEMENS",),
+    "TP ELECTRIC": ("TP",),
+    "UNAL": ("UNAL",),
+    "VIKO": ("VIKO",),
+    "WEIDMULLER": ("WEIDMULLER",),
+}
+
+
+def anka_eslesme_bul(b2b_row, tsoft_df, lookup):
+    """ANKA kodunu eşleştirir ve hedef ürün adındaki markayı doğrular."""
+    sonuc, eslesme_bicimi, kullanilan_kod = b2b_eslesme_bul(
+        b2b_row.get("Eslesmede Kullanilacak Kod", ""),
+        tsoft_df,
+        lookup,
+    )
+
+    if sonuc is None or isinstance(sonuc, str):
+        return sonuc, eslesme_bicimi, kullanilan_kod
+
+    marka_norm = metin_norm(marka_adi_standart(b2b_row.get("B2B Marka", "")))
+    izinli_on_ekler = ANKA_TSOFT_URUN_ADI_MARKA_ON_EKLERI.get(marka_norm, ())
+    urun_adi_norm = metin_norm(sonuc.get("Ürün Adı", ""))
+    marka_uygun = any(
+        urun_adi_norm == on_ek or urun_adi_norm.startswith(f"{on_ek} ")
+        for on_ek in izinli_on_ekler
+    )
+
+    if not marka_uygun:
+        return None, "ANKA_MARKA_KONTROL", kullanilan_kod
+
+    return sonuc, f"ANKA_{eslesme_bicimi}", kullanilan_kod
 
 
 def vekmar_direkt_eslesme_bul(b2b_row, tsoft_df):
@@ -7866,6 +8101,17 @@ def yildiz_direkt_eslesme_bul(web_servis_kodu, marka, tsoft_df):
         return tsoft_df.loc[bulunanlar[0]], eslesme_bicimi, aranan_kod
 
     return "COKLU", eslesme_bicimi, aranan_kod
+
+
+def nead_gwest_marka_cakismasi_mi(b2b_row, tsoft_row):
+    """KONYA/YILDIZ NEAD kodunu T-Soft'taki GWEST urunune baglama."""
+    if not isinstance(tsoft_row, pd.Series):
+        return False
+    return (
+        metin_norm(b2b_row.get("Tedarikci", "")) in {"KONYA", "YILDIZ"}
+        and metin_norm(b2b_row.get("B2B Marka", "")) == "NEAD"
+        and metin_norm(tsoft_row.get("Ürün Adı", "")).startswith("GWEST ")
+    )
 
 
 def bos_df(kolonlar):
@@ -8883,6 +9129,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
         "MET STOK",
         "KLTSHOP STOK",
         "VEKMAR STOK",
+        "ANKA STOK",
         "TOPLAM BAYİ STOK",
     ]
 
@@ -8918,7 +9165,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
     )
     bayi_ozet.columns.name = None
 
-    for firma in ["KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "VEKMAR"]:
+    for firma in ["KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "VEKMAR", "ANKA"]:
         if firma not in bayi_ozet.columns:
             bayi_ozet[firma] = 0
         bayi_ozet = bayi_ozet.rename(columns={firma: f"{firma} STOK"})
@@ -8936,6 +9183,7 @@ def marka_firma_stok_ozeti_olustur(tedarikci_bazli_df):
         + ozet["MET STOK"]
         + ozet["KLTSHOP STOK"]
         + ozet["VEKMAR STOK"]
+        + ozet["ANKA STOK"]
     )
     for kolon in kolonlar[1:]:
         ozet[kolon] = pd.to_numeric(ozet[kolon], errors="coerce").fillna(0).astype(int)
@@ -8954,6 +9202,7 @@ def tum_bayiler_tsoftta_yok_urunleri_olustur(b2bde_var_sitede_yok_df):
         "MEANWELL",
         "YILDIZ",
         "VEKMAR",
+        "ANKA",
     ]
     sonuc_kolonlari = [
         "Marka",
@@ -9199,6 +9448,9 @@ def duzenli_raporlari_kaydet(
     vekmar_tsoftta_yok_stok_var, vekmar_tsoftta_yok_stok_yok = (
         tsoftta_yok_stoga_gore_ayir("VEKMAR")
     )
+    anka_tsoftta_yok_stok_var, anka_tsoftta_yok_stok_yok = (
+        tsoftta_yok_stoga_gore_ayir("ANKA")
+    )
 
     bayi_raporlari = {
         "KONYA": konya_raporlar or {},
@@ -9230,8 +9482,10 @@ def duzenli_raporlari_kaydet(
         },
         "YILDIZ": {
             "yildiz_eslesmeyenler": genel_eslesmeyenler_olustur("YILDIZ"),
-            "yildiz_stok_guncellenecekler": guncelleme_kaynagi_kurallarini_uygula(
-                tedarikciye_gore_filtrele(tedarikci_bazli_df, "YILDIZ")
+            "yildiz_stok_guncellenecekler": yildiz_dusuk_stok_kuralini_uygula(
+                guncelleme_kaynagi_kurallarini_uygula(
+                    tedarikciye_gore_filtrele(tedarikci_bazli_df, "YILDIZ")
+                )
             ),
             "yildiz_tsoftta_yok_b2b_stok_var": yildiz_tsoftta_yok_stok_var,
             "yildiz_tsoftta_yok_b2b_stok_yok": yildiz_tsoftta_yok_stok_yok,
@@ -9243,6 +9497,14 @@ def duzenli_raporlari_kaydet(
             ),
             "vekmar_tsoftta_yok_b2b_stok_var": vekmar_tsoftta_yok_stok_var,
             "vekmar_tsoftta_yok_b2b_stok_yok": vekmar_tsoftta_yok_stok_yok,
+        },
+        "ANKA": {
+            "anka_eslesmeyenler": genel_eslesmeyenler_olustur("ANKA"),
+            "anka_stok_guncellenecekler": guncelleme_kaynagi_kurallarini_uygula(
+                tedarikciye_gore_filtrele(tedarikci_bazli_df, "ANKA")
+            ),
+            "anka_tsoftta_yok_b2b_stok_var": anka_tsoftta_yok_stok_var,
+            "anka_tsoftta_yok_b2b_stok_yok": anka_tsoftta_yok_stok_yok,
         },
     }
 
@@ -9751,6 +10013,12 @@ def main():
             tsoft_row, eslesme_bicimi, kullanilan_kod = oznur_direkt_sonuc
         elif vekmar_direkt_sonuc is not None:
             tsoft_row, eslesme_bicimi, kullanilan_kod = vekmar_direkt_sonuc
+        elif metin_norm(b2b_row.get("Tedarikci", "")) == "ANKA":
+            tsoft_row, eslesme_bicimi, kullanilan_kod = anka_eslesme_bul(
+                b2b_row,
+                tsoft_df,
+                lookup,
+            )
         elif metin_norm(b2b_row.get("Tedarikci", "")) == "YILDIZ":
             tsoft_row, eslesme_bicimi, kullanilan_kod = yildiz_direkt_eslesme_bul(
                 b2b_kod,
@@ -9764,10 +10032,16 @@ def main():
                 lookup
             )
 
+        if nead_gwest_marka_cakismasi_mi(b2b_row, tsoft_row):
+            tsoft_row = None
+            eslesme_bicimi = "NEAD_GWEST_MARKA_CAKISMASI"
+
         if tsoft_row is None:
             satir = b2b_row.to_dict()
 
-            if eslesme_tipi == "MANUEL_ESLESME":
+            if eslesme_bicimi == "NEAD_GWEST_MARKA_CAKISMASI":
+                satir["Neden"] = "NEAD kodu GWEST urunune denk geldi; marka uyusmazligi"
+            elif eslesme_tipi == "MANUEL_ESLESME":
                 satir["Neden"] = "Manuel T-Soft kodu bulundu ama T-Soft ürün listesinde eşleşmedi"
             else:
                 satir["Neden"] = "B2B'de var, sitede yok"

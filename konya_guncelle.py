@@ -56,6 +56,12 @@ def konya_guncelleme_hariclerini_cikar(df):
         .str.translate(str.maketrans("ÇĞİÖŞÜ", "CGIOSU"))
     )
     haric_maskesi = marka_norm.isin(KONYA_GUNCELLEME_HARIC_MARKALAR)
+    if "ProductId" in df.columns:
+        # Eski raporlarda NEAD 1004, GWEST urunu 28634'e yanlis eslesebiliyor.
+        haric_maskesi |= (
+            df["ProductId"].astype(str).str.strip().eq("28634")
+            & marka_norm.eq("NEAD")
+        )
     haric_sayi = int(haric_maskesi.sum())
 
     if haric_sayi:

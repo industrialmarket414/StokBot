@@ -18,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 VARSAYILAN_CIKTI_DIR = BASE_DIR / "Cikti"
 FIRMALAR = [
     "KIRAC", "KONYA", "SANTRAL", "MET", "KLTSHOP", "MEANWELL", "YILDIZ",
-    "VEKMAR",
+    "VEKMAR", "ANKA",
 ]
 MANUEL_KOLONLAR = [
     "Nihai Karar",
@@ -101,7 +101,7 @@ def stok_sayisina_cevir(deger) -> int | None:
 
 
 def kaynak_dosyalari_bul(cikti_dir: Path) -> list[tuple[str, Path]]:
-    """8 bayi icin eslesmeyen, stoklu aday ve stoksuz izleme dosyalarini bulur."""
+    """Tum bayiler icin eslesmeyen, stoklu aday ve stoksuz izleme dosyalarini bulur."""
     bulunan: list[tuple[str, Path]] = []
     for firma in FIRMALAR:
         firma_dir = cikti_dir / firma
@@ -567,7 +567,7 @@ def tek_yonetim_raporu_yaz(
     eslesen_stoksuz_urun = int(guncelleme_sayilari.get("stoksuz", 0))
     ozet = pd.DataFrame([
         ["TSoft'ta Yok", "B2B'de var toplam ürün", len(adaylar) + len(stoksuz),
-         "Yedi bayide tekilleştirilmiş toplam ürün sayısı"],
+         "Tüm bayilerde tekilleştirilmiş toplam ürün sayısı"],
         ["TSoft'ta Yok", "Stoklu toplam ürün", len(adaylar),
          "Eklenecek ve incelenecek stoklu ürünlerin toplamı"],
         ["TSoft'ta Yok", "Eklenecek ürün", eklenecek_sayisi,
@@ -687,7 +687,7 @@ def tek_yonetim_raporu_yaz(
 
 
 def argumanlar():
-    parser = argparse.ArgumentParser(description="21 bayi kaynagindan tek urun yonetim Excel'i olusturur.")
+    parser = argparse.ArgumentParser(description="Tum bayi kaynaklarindan tek urun yonetim Excel'i olusturur.")
     parser.add_argument("--cikti-dir", type=Path, default=VARSAYILAN_CIKTI_DIR)
     return parser.parse_args()
 
